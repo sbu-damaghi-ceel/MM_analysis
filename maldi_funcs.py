@@ -149,41 +149,46 @@ def readXML_affine_matrix(xml_file_path):
     #If no affine matrix found, return identity matrix
     return identity_transform
 
-def overlay_images_with_affine(base_img, transform_img1, transform_img2, base_name, transform_name1, transform_name2, affine_matrix1, affine_matrix2, bgr=False):
+def overlay_images_with_affine(base_img, base_name, bgr=False, *args):
+    """
+    Overlay images with affine transformations.
+
+    Parameters:
+        base_img (numpy.ndarray): The base image.
+        base_name (str): The name of the base image.
+        bgr (bool): Whether the images are in BGR format.
+        *args: Arbitrary number of tuples each containing (transform_img, transform_name, affine_matrix).
+
+    """
     # Convert BGR (OpenCV format, from cv2.imread) to RGB (matplotlib format)
     if bgr:
         base_img = cv2.cvtColor(base_img, cv2.COLOR_BGR2RGB)
-        transform_img1 = cv2.cvtColor(transform_img1, cv2.COLOR_BGR2RGB)
-        transform_img2 = cv2.cvtColor(transform_img2, cv2.COLOR_BGR2RGB)
-    
-    # # Ensure the affine matrix is 2x3 for cv2.warpAffine by taking the first two rows and 1,2,4-th colujmns
-    affine_matrix1_2x3 = affine_matrix1[:2, [0, 1, 3]]
-    affine_matrix2_2x3 = affine_matrix2[:2, [0, 1, 3]]
+        args = [(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), name, affine) for img, name, affine in args]
 
-    # Apply the affine transformation to the second and third images
-    rows, cols, _ = base_img.shape
-    transformed_img1 = cv2.warpAffine(transform_img1, affine_matrix1_2x3, (cols, rows))
-    transformed_img2 = cv2.warpAffine(transform_img2, affine_matrix2_2x3, (cols, rows))
+    # Ensure the affine matrix is 2x3 for cv2.warpAffine by taking the first two rows and 1,2,4-th columns
+    transformed_images = []
+    for transform_img, transform_name, affine_matrix in args:
+        affine_matrix_2x3 = affine_matrix[:2, [0, 1, 3]]
+        rows, cols, _ = base_img.shape
+        transformed_img = cv2.warpAffine(transform_img, affine_matrix_2x3, (cols, rows))
+        transformed_images.append((transformed_img, transform_name))
 
     # Plot the images separately and overlayed together
-    fig, ax = plt.subplots(1, 4, figsize=(16, 4))
+    fig, ax = plt.subplots(1, len(transformed_images) + 2, figsize=(4 * (len(transformed_images) + 2), 4))
     ax[0].imshow(base_img)
     ax[0].set_title(base_name)
     ax[0].axis('off')
-    
-    ax[1].imshow(transformed_img1)
-    ax[1].set_title(f'Transformed {transform_name1}')
-    ax[1].axis('off')
-    
-    ax[2].imshow(transformed_img2)
-    ax[2].set_title(f'Transformed {transform_name2}')
-    ax[2].axis('off')
 
-    ax[3].imshow(base_img, alpha=0.5)
-    ax[3].imshow(transformed_img1, alpha=0.3)
-    ax[3].imshow(transformed_img2, alpha=0.3)
-    ax[3].set_title(f'Overlay of {base_name}, {transform_name1}, and {transform_name2}')
-    ax[3].axis('off')
+    for i, (transformed_img, transform_name) in enumerate(transformed_images):
+        ax[i + 1].imshow(transformed_img)
+        ax[i + 1].set_title(f'Transformed {transform_name}')
+        ax[i + 1].axis('off')
+
+    ax[-1].imshow(base_img, alpha=0.5)
+    for transformed_img, _ in transformed_images:
+        ax[-1].imshow(transformed_img, alpha=0.3)
+    ax[-1].set_title(f'Overlay of {base_name} and Transformed Images')
+    ax[-1].axis('off')
 
     plt.show()
 

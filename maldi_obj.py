@@ -31,7 +31,7 @@ def get_mz_mol_mapping(df_feature_list, mz_list):
     mapped_molecules = []
     
     for mz in mz_list: #could have duplicates in mz_list
-        mask = abs(df['m/z'] - mz) <= df['Interval Width (+/- Da)']
+        mask = abs(df['m/z'] - float(mz)) <= df['Interval Width (+/- Da)']
         candidates = df[mask]
 
         if not candidates.empty:
@@ -68,12 +68,44 @@ def convert_coordinates(df_coordinates):
     df_converted['y'] = ((df_converted['y'] - min_y_micro) / pixel_length_y).round().astype(int)
     print(f'y min: {min_y_micro}',f'x min: {min_x_micro}',f'pixel length_y: {pixel_length_y}, pixel_length_x: {pixel_length_x}')
     return df_converted, (min_y_micro, min_x_micro, max_y_micro, max_x_micro), (pixel_length_y, pixel_length_x)
+def average_columns(df, group_size=4):
+    '''Average every group_size columns in the dataframe for df_intensity when output in 'row' mode from SciLab'''
+    num_columns = df.shape[1]
+    
+    # Create a list to hold the averaged columns
+    averaged_columns = []
 
-def createAdata_maldi(df_intensity, df_coordinates,df_feature_list):
-    #df_intensity 1st row is 'Spot{i}', 1st column is 'm/z' values
-    counts = df_intensity.T 
-    counts.columns = counts.iloc[0] #use the 1st row(mz values) as column names
-    counts = counts.iloc[1:]
+    # Iterate over the dataframe in steps of group_size
+    for i in range(0, num_columns, group_size):
+        # Select the group of columns
+        group = df.iloc[:, i:i + group_size]
+        
+        # Compute the mean of the group
+        mean_series = group.mean(axis=1)
+        
+        # Use the name of the first column in the group as the new column name
+        new_col_name = df.columns[i]
+        
+        # Append the resulting series to the list of averaged columns
+        averaged_columns.append((new_col_name, mean_series))
+
+    # Create a new dataframe from the averaged columns
+    averaged_df = pd.DataFrame({name: data for name, data in averaged_columns})
+
+    return averaged_df
+def createAdata_maldi(df_intensity, df_coordinates,df_feature_list,intensity_format='col'):
+    if intensity_format == 'row':
+        #convert 1st column of df_intensity to index
+        df_intensity.set_index(df_intensity.columns[0], inplace=True)
+        
+        counts = average_columns(df_intensity)
+        #handle repeated columns
+        counts.columns = [col[:-2] if col.endswith('.1') else col for col in counts.columns]
+    else:
+        #df_intensity 1st row is 'Spot{i}', 1st column is 'm/z' values
+        counts = df_intensity.T 
+        counts.columns = counts.iloc[0] #use the 1st row(mz values) as column names
+        counts = counts.iloc[1:]
 
     mapped_molecule = get_mz_mol_mapping(df_feature_list, counts.columns)
     counts.columns=mapped_molecule#convert from mz to molecule names
