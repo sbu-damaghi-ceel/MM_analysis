@@ -22,19 +22,17 @@ import math
 from functools import reduce
 '''combine and then phenotyping main function'''
 
-def combine_pheno_main(control_path_list, spheroid_names,spatial_key,Harmony=False):
+def combine_pheno_main(adata_list, spheroid_names,spatial_key,Harmony=False,spot_size=1):
     
     #spheroid_names = [re.search(r'[^/]+(?=\.h5ad)',adata_path).group() for adata_path in control_path_list]
     # Initialize lists to store AnnData objects and molecule names
-    adata_list = []
+    
     mol_list = None
 
     # Load AnnData objects and determine common molecules
-    for adata_path in control_path_list:
-        adata_spheroid = ad.read_h5ad(adata_path)
-        print(f'spheroid size: {adata_spheroid.obsm[spatial_key][:,0].max()}*{adata_spheroid.obsm[spatial_key][:,1].max()} pixel^2')
+    for adata_spheroid in adata_list:
         
-        adata_list.append(adata_spheroid)
+        print(f'spheroid size: {adata_spheroid.obsm[spatial_key][:,0].max()}*{adata_spheroid.obsm[spatial_key][:,1].max()} pixel^2')
         # Get common molecule list
         if mol_list is None:
             mol_list = set(adata_spheroid.var_names)
@@ -53,8 +51,9 @@ def combine_pheno_main(control_path_list, spheroid_names,spatial_key,Harmony=Fal
     # Ensure that the Spheroid field is in the obs DataFrame
     adata_all.obs['Spheroid'] = adata_all.obs['Spheroid'].astype('category')
 
-    adata_all.varm['rangeMax'] = reduce(np.maximum, [adata_spheroid.varm['rangeMax'] for \
-                                                adata_spheroid in adata_list])
+    if 'rangeMin' in adata_list[0].varm:
+        adata_all.varm['rangeMax'] = reduce(np.maximum, [adata_spheroid.varm['rangeMax'] for \
+                                                    adata_spheroid in adata_list])
 
     # Features in Umap
     sc.tl.pca(adata_all, n_comps=min(100,adata_all.n_vars-1))
@@ -80,6 +79,7 @@ def combine_pheno_main(control_path_list, spheroid_names,spatial_key,Harmony=Fal
     sc.pl.umap(adata_all,color='phenotype',frameon=False,show=False)
 
     #plot spatial distribution of each metacluster
+    # get color map from sc.pl
     phenotype_categories = adata_all.obs['phenotype'].cat.categories
     colors = sc.pl.palettes.default_20[:len(phenotype_categories)]
     color_map = {category: colors[i] for i, category in enumerate(phenotype_categories)}
@@ -99,12 +99,12 @@ def combine_pheno_main(control_path_list, spheroid_names,spatial_key,Harmony=Fal
         sc.pl.spatial(adata_all[adata_all.obs['Spheroid'] == sph_name], 
                       basis=spatial_key,
                       color='phenotype', 
-                      spot_size=1, 
+                      spot_size=spot_size, 
                       palette=color_map,
                       frameon=False,
                       ax=ax,
                       show=False)
-        ax.set_title(sph_name)  # Optionally set a title for each subplot
+        ax.set_title(sph_name)  
 
     # Hide any unused subplots
     for j in range(i+1, len(axs)):

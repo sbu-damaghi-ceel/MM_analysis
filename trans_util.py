@@ -10,11 +10,15 @@ import matplotlib
 import tps
 #tps code is from https://github.com/tzing/tps-deformation
 
-def apply_affine_transformation(points, affine_matrix):
+def apply_affine_transformation(points, affine_matrix,mode='forward'):
     #affine matrix can be either 3*3 or 3*4
     homogeneous_points = np.column_stack((points, np.ones((len(points), affine_matrix.shape[1] - 2))))
-    transformed_points = np.dot(homogeneous_points, affine_matrix.T)
+    if mode == 'forward':
+        transformed_points = np.dot(homogeneous_points, affine_matrix.T)
+    else:
+        transformed_points = np.dot(homogeneous_points, np.linalg.inv(affine_matrix).T)
     return transformed_points[:, :2]
+
 def trans_multiPolygon(multiPoly,trans):
     '''
         recursively handle the shapely tranform error
