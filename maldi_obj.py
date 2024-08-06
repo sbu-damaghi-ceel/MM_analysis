@@ -96,7 +96,7 @@ def average_columns(df, group_size=4):
 def createAdata_maldi(df_intensity, df_coordinates,df_feature_list,intensity_format='col'):
     if intensity_format == 'row':
         #convert 1st column of df_intensity to index
-        df_intensity.set_index(df_intensity.columns[0], inplace=True)
+        df_intensity.set_index(df_intensity.columns[0], inplace=True,drop=True)
         
         counts = average_columns(df_intensity)
         #handle repeated columns
