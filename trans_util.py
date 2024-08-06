@@ -15,8 +15,10 @@ def apply_affine_transformation(points, affine_matrix,mode='forward'):
     homogeneous_points = np.column_stack((points, np.ones((len(points), affine_matrix.shape[1] - 2))))
     if mode == 'forward':
         transformed_points = np.dot(homogeneous_points, affine_matrix.T)
-    else:
+    elif mode == 'backward':
         transformed_points = np.dot(homogeneous_points, np.linalg.inv(affine_matrix).T)
+    else:
+        raise ValueError('mode should be either forward or backward')
     return transformed_points[:, :2]
 
 def trans_multiPolygon(multiPoly,trans):
