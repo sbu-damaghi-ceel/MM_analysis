@@ -56,7 +56,7 @@ def read_metaspace_annotation(annotation_file, fdr_thres=None):
     if fdr_thres is not None:
         annotations = annotations[annotations['fdr'] <= fdr_thres]
     return annotations
-def createAdata_maldi_from_metaspace(combined):
+def createAdata_maldi_from_metaspace(intensities,annotations):
     '''
     centroided imzML output from SCiLab with TIC normalization, metaspace did hotspot removal
     input:
@@ -65,7 +65,7 @@ def createAdata_maldi_from_metaspace(combined):
     annotations: pd.DataFrame, each row is a molecule, 
                 contain 'formula','mz','adduct', 'moleculeNames', 'moleculeIds',etc
     '''
-
+    combined = intensities.merge(annotations, on=['mz'],how='inner')
     
     regex_pattern = r'x(\d+)_y(\d+)'
     xy_columns = [col for col in combined.columns if re.match(regex_pattern, col)]
@@ -80,11 +80,12 @@ def createAdata_maldi_from_metaspace(combined):
     #concatenate formula and adduct to get identifier
     combined['identifier'] =  combined['formula'] +'_'+ combined['adduct']
     adata.var_names = combined['identifier'].values
-    adata.varm = combined.drop(columns=xy_columns).set_index('identifier')
+    adata.var = combined.drop(columns=xy_columns).set_index('identifier')
+    
     
 
     ####For visualization purpose, when need to compare hearmaps of the same molecule across different samples, should unify rangeMax first
-    adata.varm['rangeMax'] = np.percentile(adata.X,99,axis=0)#GET RID OF OUTLIERS#np.max(adata.X,axis=0)
+    adata.var['rangeMax'] = np.percentile(adata.X,99,axis=0)#GET RID OF OUTLIERS#np.max(adata.X,axis=0)
     
     print(f'adata shape: {adata.X.shape}')
     return adata
@@ -149,7 +150,13 @@ def readXML_affine_matrix(xml_file_path):
     #If no affine matrix found, return identity matrix
     return identity_transform
 
-def overlay_images_with_affine(base_img, base_name, bgr=False, *args):
+def transform_image_single(base_img, transform_img, affine_matrix):
+    affine_matrix_2x3 = affine_matrix[:2, [0, 1, 3]]
+    rows, cols, _ = base_img.shape
+    transformed_img = cv2.warpAffine(transform_img, affine_matrix_2x3, (cols, rows))
+    return transformed_img
+
+def overlay_images_with_affine(base_img, base_name, *args,bgr=False,plot=False):
     """
     Overlay images with affine transformations.
 
@@ -168,29 +175,30 @@ def overlay_images_with_affine(base_img, base_name, bgr=False, *args):
     # Ensure the affine matrix is 2x3 for cv2.warpAffine by taking the first two rows and 1,2,4-th columns
     transformed_images = []
     for transform_img, transform_name, affine_matrix in args:
-        affine_matrix_2x3 = affine_matrix[:2, [0, 1, 3]]
-        rows, cols, _ = base_img.shape
-        transformed_img = cv2.warpAffine(transform_img, affine_matrix_2x3, (cols, rows))
+        transformed_img = transform_image_cv2(base_img, transform_img, affine_matrix)
         transformed_images.append((transformed_img, transform_name))
 
-    # Plot the images separately and overlayed together
-    fig, ax = plt.subplots(1, len(transformed_images) + 2, figsize=(4 * (len(transformed_images) + 2), 4))
-    ax[0].imshow(base_img)
-    ax[0].set_title(base_name)
-    ax[0].axis('off')
+    if plot:
+        # Plot the images separately and overlayed together
+        fig, ax = plt.subplots(1, len(transformed_images) + 2, figsize=(4 * (len(transformed_images) + 2), 4))
+        ax[0].imshow(base_img)
+        ax[0].set_title(base_name)
+        ax[0].axis('off')
 
-    for i, (transformed_img, transform_name) in enumerate(transformed_images):
-        ax[i + 1].imshow(transformed_img)
-        ax[i + 1].set_title(f'Transformed {transform_name}')
-        ax[i + 1].axis('off')
+        for i, (transformed_img, transform_name) in enumerate(transformed_images):
+            ax[i + 1].imshow(transformed_img)
+            ax[i + 1].set_title(f'Transformed {transform_name}')
+            ax[i + 1].axis('off')
 
-    ax[-1].imshow(base_img, alpha=0.5)
-    for transformed_img, _ in transformed_images:
-        ax[-1].imshow(transformed_img, alpha=0.3)
-    ax[-1].set_title(f'Overlay of {base_name} and Transformed Images')
-    ax[-1].axis('off')
+        ax[-1].imshow(base_img, alpha=0.5)
+        for transformed_img, _ in transformed_images:
+            ax[-1].imshow(transformed_img, alpha=0.3)
+        ax[-1].set_title(f'Overlay of {base_name} and Transformed Images')
+        ax[-1].axis('off')
 
-    plt.show()
+        plt.show()
+
+    return transformed_images
 
 
 def visualize_coreg(parent_dir,adata_cer,adata_met,adata_sm,affine_matrix_met,affine_matrix_sm,show='generated'):
@@ -203,8 +211,8 @@ def visualize_coreg(parent_dir,adata_cer,adata_met,adata_sm,affine_matrix_met,af
         sm_gray,_ = create_intensity_image(adata_sm,adata_sm.var_names[0],spatial_key='spatial')
         sm_img = create_channel_image(sm_gray, 2)
 
-        overlay_images_with_affine(cer_img, met_img,sm_img,'cer','met','sm',
-                                   affine_matrix_met,affine_matrix_sm)
+        overlay_images_with_affine(cer_img, 'cer',(met_img,'met',affine_matrix_met),\
+                                   (sm_img,'sm',affine_matrix_sm))
         
     elif show == 'metaspace':
         #images downloaded from METASPACE
@@ -212,13 +220,54 @@ def visualize_coreg(parent_dir,adata_cer,adata_met,adata_sm,affine_matrix_met,af
         met_img = cv2.imread(join(parent_dir,'coreg','Met.png'))
         sm_img = cv2.imread(join(parent_dir,'coreg','SM.png'))
         
-        overlay_images_with_affine(cer_img, met_img,sm_img,'cer','met','sm',
-                                   affine_matrix_met,affine_matrix_sm,bgr=True)
+        
+        overlay_images_with_affine(cer_img, 'cer',(met_img,'met',affine_matrix_met),\
+                                   (sm_img,'sm',affine_matrix_sm),bgr=True)
     else:
         print('Invalid show option, should be either "generated" or "metaspace"')
         return
 
+def merge_anndata_on_spatial(adata1, col1,adata2,col2):
+    spatial1 = adata1.obsm[col1].astype(int)
+    spatial2 = adata2.obsm[col2]
+    
+    df_spatial1 = pd.DataFrame(spatial1, columns=['x', 'y'])
+    df_spatial2 = pd.DataFrame(spatial2, columns=['x', 'y'])
+    
 
+    df_spatial1['index1'] = df_spatial1.index
+    df_spatial2['index2'] = df_spatial2.index
+    
+    # Merge the dataframes on spatial coordinates
+    merged_df = pd.merge(df_spatial1, df_spatial2, on=['x', 'y'], how='left')
+    
+    new_X = []
+    obs_data = []
+    for idx1, row in merged_df.iterrows():
+        if pd.notna(row['index2']):
+            idx2 = int(row['index2'])
+            new_row = np.concatenate((adata1.X[idx1], adata2.X[idx2]))
+            obs_row = adata2.obs.iloc[idx2].to_dict()
+        else:
+            new_row = np.concatenate((adata1.X[idx1], np.full(adata2.X.shape[1], np.nan)))
+            obs_row = {col: np.nan for col in adata2.obs.columns}
+        new_X.append(new_row)
+        obs_data.append(obs_row)
+    
+    new_X = np.array(new_X)
+    obs_df = pd.DataFrame(obs_data, index=adata1.obs_names)
+    
+    new_adata = ad.AnnData(X=new_X)
+    new_adata.obs_names = adata1.obs_names.copy()
+    new_var_names = np.concatenate((adata1.var_names, adata2.var_names))
+    new_adata.var_names = new_var_names
+    new_adata.var['source'] = ['macsima']*len(adata1.var_names) + ['maldi']*len(adata2.var_names)
+
+    
+    new_adata.obsm = adata1.obsm.copy()
+    new_adata.obs = pd.concat([adata1.obs.add_prefix('macsima_'), obs_df.add_prefix('maldi_')], axis=1)
+    
+    return new_adata
 ######################## Phenotypying
 ## Use 2 phase clustering to identify phenotypes
 def phenoAdata(df,show=False):
@@ -248,7 +297,9 @@ def phenoAdata(df,show=False):
 
     # Make heatmap
     if show:
-        sns_plot = sns.clustermap(df_mean.drop(columns=['cluster', 'count']), z_score=1, cmap="vlag", center=0, yticklabels=True)
+        sns_plot = sns.clustermap(df_mean.drop(columns=['cluster', 'count']), 
+                                  z_score=1, cmap="vlag", center=0,xticklabels=True, yticklabels=True)
+        
         #sns_plot.figure.savefig(f"example_cluster_heatmap.png")
 
     cc = ConsensusCluster(
@@ -269,7 +320,8 @@ def phenoAdata(df,show=False):
 
     df_mean_meta = df.drop(columns='cluster').groupby(['metacluster']).mean()
     if show:
-        sns_plot = sns.clustermap(df_mean_meta, z_score=1, cmap="vlag", center=0, yticklabels=True)
+        sns_plot = sns.clustermap(df_mean_meta, z_score=1, cmap="vlag", center=0,xticklabels=True, yticklabels=True)
+        
         #sns_plot.figure.savefig(f"example_metacluster_heatmap.png")
     return df
     

@@ -24,6 +24,8 @@ from shapely.geometry import Point, Polygon
 from shapely.ops import nearest_points
 from scipy.interpolate import make_interp_spline
 
+import h5py
+
 import pdb
 
 def get_mz_mol_mapping(df_feature_list, mz_list):
@@ -119,6 +121,8 @@ def createAdata_maldi(df_intensity, df_coordinates,df_feature_list,intensity_for
         print(f'{molecule_name} is at least 95% 0-intensity')
     counts_filtered = counts.drop(columns=low_intensity_columns)
     
+    if counts_filtered.shape[1] == 0:
+        raise ValueError('All molecules have 95% or more 0-intensities')
     adata = ad.AnnData(counts_filtered)
     adata.obs_names = counts_filtered.index #index is 'Spot {i}'
     adata.var_names = counts_filtered.columns 
@@ -148,8 +152,13 @@ def createAdata_maldi(df_intensity, df_coordinates,df_feature_list,intensity_for
 def create_intensity_image(adata, molecule, spatial_key,norm=True, denoise=False, smooth=True, smooth_method='gaussian', kernel_size=3):
     intensities = adata[:,molecule].X.toarray().flatten()
     max_x, max_y = adata.obsm[spatial_key][:,0].max(), adata.obsm[spatial_key][:,1].max()
-    image = np.zeros((max_y+1,max_x+1))
-    max = adata.varm['rangeMax'][adata.var_names == molecule][0]
+    image = np.zeros((int(max_y)+1,int(max_x)+1))
+
+    if 'rangeMax' in adata.varm:
+        max = adata.varm['rangeMax'][adata.var_names == molecule][0]
+    else:
+        max = np.max(intensities)
+    
     for i, intensity in enumerate(intensities):
         
         x, y = adata.obsm[spatial_key][i,:]
@@ -178,6 +187,8 @@ def get_image_dict(adata,spatial_key,molecule_list=None,verbose=True):
             print(f'Molecule {molecule} done')
     return image_dict
 
+
+    
 def coreg_merge_img_dict(base_img_dict, *additional_img_dicts_coreg_tuple):
     """
     Merges additional image dictionaries into a base image dictionary. Images in additional
@@ -427,7 +438,21 @@ def getForegroundMask(image_dict,plot_flag=False):
     distances_flat = distances_array[mask].flatten()
 
     return mask, common_boundary,distances_flat
+def add_distance_obs(adata,spatial_key='spatial'):
+    image_dict = get_image_dict(adata,spatial_key=spatial_key)
+    mask, common_boundary,distances_flat = getForegroundMask(image_dict)
+    distances_array = np.zeros_like(mask, dtype=distances_flat.dtype)
+    distances_array[mask] = distances_flat
 
+    #add a new obs column to store the distances
+    adata.obs['distances'] = np.zeros(adata.shape[0])
+    for i,idx in enumerate(adata.obs.index):
+        x,y = adata.obsm[spatial_key][i]
+        if 0 <= y < distances_array.shape[0] and 0 <= x < distances_array.shape[1]:
+            adata.obs.loc[idx, 'distances'] = distances_array[y, x]#images are x,y flipped
+        else:
+            print(f"Warning: Coordinates ({x},{y}) are out of bounds for distances_array")
+    return
 def dist2Bdry_plot_single(image, molecule_name, distances_flat, intensities_flat, distance_threshold, common_boundary, pixel_len,axs):
     if image.dtype != np.uint8:
         image = (255 * image).astype(np.uint8)
@@ -512,3 +537,122 @@ def dist2Bdry_plot_main(image_dict,distance_threshold,pixel_len=20,keys=None):
         dist2Bdry_plot_single(image, molecule_name, distances_flat, intensities_flat, distance_threshold, common_boundary, pixel_len, axs_row)
     plt.tight_layout()
     return fig,axs
+
+
+
+##########################################Tuple format to store image data
+def get_image_tuple_and_save_h5(adata, spatial_key, h5_filename=None, molecule_list=None, verbose=False):
+    if molecule_list is None:
+        molecule_list = list(adata.var_names)
+
+    
+    images = []
+    max_values = []
+
+    for molecule in molecule_list:
+        # norm=False to store the raw intensities
+        image, max_value = create_intensity_image(adata, molecule, spatial_key,norm=False)
+        images.append(image)
+        max_values.append(max_value)
+        if verbose:
+            print(f'Molecule {molecule} done')
+
+    image_array = np.stack(images)
+
+    if h5_filename is not None:
+
+        with h5py.File(h5_filename, 'w') as hf:
+            
+            hf.create_dataset('images', data=image_array)
+            hf.create_dataset('molecule_names', data=np.array(molecule_list, dtype='S'))  # Save molecule names as bytes
+            hf.create_dataset('max_values', data=np.array(max_values))
+
+        print(f"Data successfully saved in {h5_filename}")
+    image_tuple = (image_array, molecule_list, max_values)
+    return image_tuple
+def getForegroundMask_tuple(image_tuple,plot_flag=False):
+    image_array, molecule_list, max_values = image_tuple
+    
+    mask = np.zeros(image_array[0].shape, dtype=bool)
+    for i in range(image_array.shape[0]):
+        image = image_array[i]/max_values[i]
+        mask |= (image != 0) 
+    points = np.argwhere(mask > 0)  
+
+    # Use alphashape to find the concave hull
+    points = points[:, [1, 0]]# Convert to (x, y) format!!
+    common_boundary = alphashape.alphashape(points,alpha=0)
+    if plot_flag:
+        ####visualize the boundary with the 1st image
+        fig, ax = plt.subplots()
+        ax.imshow(image_array[0], cmap='gray')
+        polygon_points = np.array(common_boundary.exterior.coords)
+        ax.plot(polygon_points[:, 0], polygon_points[:, 1], 'r-', linewidth=2) 
+        ax.fill(polygon_points[:, 0], polygon_points[:, 1], 'r', alpha=0.3)  
+        plt.title('Alpha Shape Polygon Overlay on Image')
+        plt.axis('equal')
+        plt.axis('off')
+        plt.show()
+
+    distances_array = np.full(image_array[0].shape, np.nan)
+
+    # Only calculate distances for pixels within the mask
+    for y in range(mask.shape[0]):
+        for x in range(mask.shape[1]):
+            if mask[y, x]:  # If the pixel is within the combined mask
+                point = Point(x, y)
+                nearest_geom = nearest_points(common_boundary.boundary, point)[0]
+                distance = point.distance(nearest_geom)
+                distances_array[y, x] = distance
+
+    distances_flat = distances_array[mask].flatten()
+
+    return mask, common_boundary,distances_flat
+def coreg_merge_img_tuple(base_tuple,coreg_tuple,coreg_affine_matrix):
+                        
+    base_image_array, base_molecule_list, base_max_values = base_tuple
+    coreg_image_array, coreg_molecule_list, coreg_max_values = coreg_tuple
+
+    
+    target_height, target_width = base_image_array[0].shape[:2] 
+    for i in range(coreg_image_array.shape[0]):
+        if coreg_molecule_list[i] in base_molecule_list:
+            print(f'Duplicate molecule {coreg_molecule_list[i]} found in coregistered image. Skipping...')
+            continue
+        # Resize the coregistered image to match the base image
+        affine_matrix_2x3 = coreg_affine_matrix[:2, [0, 1, 3]]
+        coreg_image = coreg_max_values[i]*cv2.warpAffine(coreg_image_array[i]/coreg_max_values[i], \
+                                     affine_matrix_2x3, (target_width, target_height))
+        base_image_array = np.append(base_image_array, coreg_image[np.newaxis, ...], axis=0)
+        base_molecule_list.append(coreg_molecule_list[i])
+        base_max_values.append(coreg_max_values[i])
+    return base_image_array, base_molecule_list, base_max_values
+
+def restore_anndata_from_tuple(image_tuple,spatial_key,molecule_names=None):
+    image_array, molecule_list, max_values = image_tuple
+    if molecule_names is None:
+        molecule_names = molecule_list
+    
+    mask,_,_ = getForegroundMask_tuple(image_tuple)
+    all_coords = np.argwhere(mask > 0)[:, [1, 0]]  # Convert to (x, y) format
+   
+    X = np.zeros((len(all_coords), len(molecule_names)))
+    # Populate the intensities and spatial coordinates
+    for i in range(image_array.shape[0]):
+        image = image_array[i]
+        
+        # Only consider pixels inside the mask
+        intensities = image[mask].flatten()
+        X[:,i] = intensities
+        
+
+    new_adata = ad.AnnData(X=X)
+    # Set the spatial coordinates
+    new_adata.obsm[spatial_key] = all_coords
+    # Set the varm['rangeMax']
+    new_adata.varm['rangeMax'] = np.array(max_values)
+    # Set the variable names
+    new_adata.var_names = molecule_names
+    
+    print(f'Restored adata shape: {new_adata.X.shape}')
+    return new_adata

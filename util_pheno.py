@@ -37,7 +37,7 @@ def combine_pheno_main(adata_list, spheroid_names,spatial_key,Harmony=False,spot
         if mol_list is None:
             mol_list = set(adata_spheroid.var_names)
         else:
-            mol_list.intersection_update(adata_spheroid.var_names)
+            mol_list.intersection_update(set(adata_spheroid.var_names))
 
     # Convert mol_list back to a list
     mol_list = list(mol_list)
@@ -51,13 +51,16 @@ def combine_pheno_main(adata_list, spheroid_names,spatial_key,Harmony=False,spot
     # Ensure that the Spheroid field is in the obs DataFrame
     adata_all.obs['Spheroid'] = adata_all.obs['Spheroid'].astype('category')
 
-    if 'rangeMin' in adata_list[0].varm:
+    if 'rangeMax' in adata_list[0].varm:
         adata_all.varm['rangeMax'] = reduce(np.maximum, [adata_spheroid.varm['rangeMax'] for \
                                                     adata_spheroid in adata_list])
 
     # Features in Umap
     sc.tl.pca(adata_all, n_comps=min(100,adata_all.n_vars-1))
-    
+    sc.pp.neighbors(adata_all, use_rep='X_pca', n_neighbors=30, metric='cosine')
+    sc.pp.neighbors(adata_all, n_neighbors=30, metric='cosine')
+    sc.tl.umap(adata_all,random_state=42)
+    sc.pl.umap(adata_all,color='Spheroid',frameon=False,show=False)
     if Harmony:
         # Harmony
         sc.external.pp.harmony_integrate(adata_all, key='Spheroid',max_iter_harmony=20)
@@ -66,10 +69,7 @@ def combine_pheno_main(adata_list, spheroid_names,spatial_key,Harmony=False,spot
         sc.pl.umap(adata_all,neighbors_key='neighbors_harmony',color='Spheroid',frameon=False,show=False)
         df1 = pd.DataFrame(data=adata_all.obsm['X_pca_harmony'],dtype='float64')
     else:
-        sc.pp.neighbors(adata_all, use_rep='X_pca', n_neighbors=30, metric='cosine')
-        sc.pp.neighbors(adata_all, n_neighbors=30, metric='cosine')
-        sc.tl.umap(adata_all,random_state=42)
-        sc.pl.umap(adata_all,color='Spheroid',frameon=False,show=False)
+        
         df1 = pd.DataFrame(data=adata_all.X, columns=adata_all.var_names)
 
     # Plot spatial distribution of each metacluster for each spheroid
@@ -94,7 +94,7 @@ def combine_pheno_main(adata_list, spheroid_names,spatial_key,Harmony=False,spot
     # Flatten the axs array for easy iteration
     axs = axs.flatten()
 
-    for i, sph_name in enumerate(spheroid_names):
+    for i, sph_name in enumerate(sorted(spheroid_names)):
         ax = axs[i]
         sc.pl.spatial(adata_all[adata_all.obs['Spheroid'] == sph_name], 
                       basis=spatial_key,
@@ -115,46 +115,4 @@ def combine_pheno_main(adata_list, spheroid_names,spatial_key,Harmony=False,spot
     return adata_all, df
 
 
-def merge_anndata_on_spatial(adata1, col1,adata2,col2):
-    spatial1 = adata1.obsm[col1].astype(int)
-    spatial2 = adata2.obsm[col2]
-    
-    df_spatial1 = pd.DataFrame(spatial1, columns=['x', 'y'])
-    df_spatial2 = pd.DataFrame(spatial2, columns=['x', 'y'])
-    
 
-    df_spatial1['index1'] = df_spatial1.index
-    df_spatial2['index2'] = df_spatial2.index
-    
-    # Merge the dataframes on spatial coordinates
-    merged_df = pd.merge(df_spatial1, df_spatial2, on=['x', 'y'], how='left')
-    
-    new_X = []
-    pheno_list = []
-    for idx1, row in merged_df.iterrows():
-        if pd.notna(row['index2']):
-            idx2 = int(row['index2'])
-            new_row = np.concatenate((adata1.X[idx1], adata2.X[idx2]))
-            new_pheno = adata2.obs['phenotype'][idx2]
-        else:
-            new_row = np.concatenate((adata1.X[idx1], np.full(adata2.X.shape[1], np.nan)))
-            new_pheno = np.nan
-        new_X.append(new_row)
-        pheno_list.append(new_pheno)
-    
-    new_X = np.array(new_X)
-    pheno = np.array(pheno_list)
-    
-    
-    
-    new_adata = ad.AnnData(X=new_X)
-    
-    new_adata.obs_names = adata1.obs_names.copy()
-    new_var_names = np.concatenate((adata1.var_names, adata2.var_names))
-    new_adata.var_names = new_var_names
-    new_adata.var['source'] = ['macsima']*len(adata1.var_names) + ['maldi']*len(adata2.var_names)
-
-    new_adata.obsm = adata1.obsm.copy()
-    new_adata.obs['phenotype']  = pheno
-    
-    return new_adata
