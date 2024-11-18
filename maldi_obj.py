@@ -611,7 +611,20 @@ def load_image_tuple(h5_filename,load='all'):
             max_values = hf['max_values'][:]
             return (image_array, molecule_list, max_values)
         else:
-            raise ValueError("Invalid value for 'load'. Must be 'all', 'images', 'molecule_names', or 'max_values'.")
+            raise ValueError(f"Invalid value {load} for 'load'. Must be 'all', 'images', 'molecule_names', or 'max_values'.")
+
+def lazy_load_image_by_molecule(h5_filename, molecule_name):
+    """
+    Lazy load a specific image array from the HDF5 file based on the molecule name.
+    """
+    with h5py.File(h5_filename, 'r') as hf:
+        molecule_names = [m.decode('utf-8') for m in hf['molecule_names'][:]]
+        if molecule_name not in molecule_names:
+            raise ValueError(f"Molecule '{molecule_name}' not found in the file.")
+        index = molecule_names.index(molecule_name)
+        # Lazy load the image array using the index
+        image = hf['images'][index, ...]
+        return image
 
 def getForegroundMask_tuple(image_tuple,plot_flag=False):
     image_array, molecule_list, max_values = image_tuple
