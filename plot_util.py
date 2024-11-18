@@ -185,18 +185,21 @@ def plot_boxplot_stripplot_with_images_singleRow(ax, title,names, distributions,
     )
 
     ax.set_title(title, fontsize=16)
+    ax.spines['top'].set_visible(False)
     ax.set_ylabel('Value')
     ax.set_xlabel('Group')
 
     num_columns = len(names)
     inset_width = 1 / num_columns  # Adjust the width of each inset
-    inset_height = inset_width
 
     for i, name in enumerate(names):
         image = images[i] if i < len(images) else None
         if image is not None:
             # Calculate position of the inset
             inset_x_position = i / num_columns 
+            aspect_ratio = image.shape[1] / image.shape[0]
+            inset_height = inset_width / aspect_ratio
+
             inset_ax = ax.inset_axes(
                 [inset_x_position, 1.05, inset_width, inset_height],
                 transform=ax.transAxes
