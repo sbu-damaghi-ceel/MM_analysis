@@ -93,15 +93,26 @@ def plot_corr_1vsall(adata,target_variable,selected_variables=None):
     plt.grid(True)
     plt.show()
 
-
+def get_boundary_mask(predictions,dilate_size=0):
+    if len(predictions.shape) != 4:
+        raise ValueError(f'Predictions must be 4D, got {predictions.shape}')
+    boundaries = np.zeros_like(predictions)
+    for img in range(predictions.shape[0]):
+        boundary = find_boundaries(predictions[img, ..., 0], connectivity=1, mode='inner')
+        # Increase the boundary thickness by dilating it
+        boundary_dilated = dilation(boundary, disk(dilate_size))  
+        boundaries[img, boundary_dilated > 0, :] = 1
+    # squeeze the last dimension
+    boundaries = boundaries[...,0]
+    return boundaries
 
 # adapted from deepcell.utils.plot_utils.make_outline_overlay
 def make_outline_overlay(rgb_data, predictions,dilate_size=0):
     """Overlay a segmentation mask with image data for easy visualization
 
     Args:
-        rgb_data: 3 channel array of images, output of ``create_rgb_data``
-        predictions: segmentation predictions to be visualized
+        rgb_data: 3 channel array of images, output of ``create_rgb_data`` (n,h,w,c)
+        predictions: segmentation predictions to be visualized (n,h,w,1)
 
     Returns:
         numpy.array: overlay image of input data and predictions
@@ -112,6 +123,9 @@ def make_outline_overlay(rgb_data, predictions,dilate_size=0):
     """
     if len(predictions.shape) != 4:
         raise ValueError(f'Predictions must be 4D, got {predictions.shape}')
+    # Handle 3D rgb_data(grayscale) by expanding to 4D
+    if len(rgb_data.shape) == 3:
+        rgb_data = np.expand_dims(rgb_data, axis=-1)  # Add channel dimension
 
     if predictions.shape[0] > rgb_data.shape[0]:
         raise ValueError('Must supply an rgb image for each prediction')
@@ -128,9 +142,67 @@ def make_outline_overlay(rgb_data, predictions,dilate_size=0):
         boundaries[img, boundary_dilated > 0, :] = 1
         #boundaries[img, boundary > 0, :] = 1
 
-    overlay_data[boundaries > 0] = max_v
+    overlay_data[boundaries > 0] = max_v # max_v
+    # If the input was originally 3D, squeeze the last dimension
+    if rgb_data.shape[-1] == 1:
+        overlay_data = overlay_data[..., 0]
 
     return overlay_data
+def plot_boxplot_stripplot_with_images_singleRow(ax, title,names, distributions, images):
+    """
+    Plot a boxplot with stripplot and overlay images for given names and distributions.
+
+    Parameters:
+    - ax: Matplotlib axis to plot on.
+    - names: List of names corresponding to columns/groups.
+    - distributions: List of arrays representing distributions. Some elements can be None.
+    - images: List of images corresponding to names. Some elements can be None.
+    The function ensures that all names are represented on the x-axis, even if their
+    corresponding distribution or image is None.
+    """
+    # Prepare a DataFrame with empty entries for None distributions
+    data = []
+    labels = []
+    for i, dist in enumerate(distributions):
+        if dist is not None:
+            data.extend(dist)
+            labels.extend([names[i]] * len(dist))
+        else:
+            # Add a placeholder for empty distribution to keep alignment
+            labels.append(names[i])
+            data.append(None)
+
+    df = pd.DataFrame({'Value': data, 'Group': labels})
+
+    # Plot the boxplot and stripplot
+    sns.boxplot(
+        x='Group', y='Value', data=df, ax=ax,
+        color='lightblue', showfliers=False
+    )
+    sns.stripplot(
+        x='Group', y='Value', data=df, ax=ax,
+        jitter=True, color='black', size=4, alpha=0.8
+    )
+
+    ax.set_title(title, fontsize=16)
+    ax.set_ylabel('Value')
+    ax.set_xlabel('Group')
+
+    num_columns = len(names)
+    inset_width = 1 / num_columns  # Adjust the width of each inset
+    inset_height = inset_width
+
+    for i, name in enumerate(names):
+        image = images[i] if i < len(images) else None
+        if image is not None:
+            # Calculate position of the inset
+            inset_x_position = i / num_columns 
+            inset_ax = ax.inset_axes(
+                [inset_x_position, 1.05, inset_width, inset_height],
+                transform=ax.transAxes
+            )
+            inset_ax.imshow(image)
+            inset_ax.axis('off')  # Hide axes for the inset
 
 def plot_boxplots_stripplots(ad_list, ad_names, common_var_names=None, image_dict_list=None):
     """
@@ -174,7 +246,8 @@ def plot_boxplots_stripplots(ad_list, ad_names, common_var_names=None, image_dic
 
         # Set title for the molecule
         axes[i].spines['top'].set_visible(False)
-        
+        axes[i].set_title(f'{molecule}', fontsize=20)
+        axes[i].set_ylabel('intensity')
 
         # Set the y-limit to 99th percentile to avoid outliers affecting the plot
         y_limit = np.percentile(df[f'{molecule}_Expression'], 99)
@@ -198,7 +271,7 @@ def plot_boxplots_stripplots(ad_list, ad_names, common_var_names=None, image_dic
     plt.tight_layout()
     return fig, axes
 
-def plot_unified_image_dict(ad_list,ad_names,common_var_names=None):
+def unify_ad_max(ad_list,common_var_names=None):
     if common_var_names is None:
         common_var_names = set(ad_list[0].var_names)
         for adata in ad_list[1:]:
@@ -220,9 +293,12 @@ def plot_unified_image_dict(ad_list,ad_names,common_var_names=None):
     rangeMax_max = np.max(np.vstack([adata.varm['rangeMax'] for adata in reordered_adata_list]),axis=0)
     for adata in reordered_adata_list:
         adata.varm['rangeMax'] = rangeMax_max
-
+    return reordered_adata_list
+def plot_unified_image_dict(ad_list,ad_names,common_var_names=None):
+    reordered_adata_list = unify_ad_max(ad_list,common_var_names=common_var_names)
     num_ad = len(ad_list)
-    num_molecules = len(common_var_names)
+    num_molecules = len(ad_list[0].var_names)
+
     fig,axs = plt.subplots(num_molecules,num_ad,figsize=(20,5*num_molecules))
     for j, (name, adata) in enumerate(zip(ad_names, reordered_adata_list)):
         axs[0, j].set_title(name,fontsize=20)
@@ -230,7 +306,7 @@ def plot_unified_image_dict(ad_list,ad_names,common_var_names=None):
         for i, molecule in enumerate(common_var_names):
             image, rangeMax = image_dict.get(molecule)
             if image is not None:
-                im = axs[i,j].imshow(image,aspect='auto',cmap='jet',vmin=0,vmax=1)
+                im = axs[i,j].imshow(image,aspect='auto',cmap='jet',vmin=0,vmax=1) ##SPECIFYING VMIN VMAX!!
                 #axs[i,j].axis('off')
                 # Turn off ticks, but keep the axis frame so labels can show
                 axs[i, j].set_xticks([])

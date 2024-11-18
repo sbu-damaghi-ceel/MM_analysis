@@ -1,3 +1,5 @@
+import pdb
+
 import re
 import numpy as np
 import pandas as pd
@@ -44,7 +46,7 @@ def read_metaspace_intensity(intensity_file,perc_thres=95,verbose = False):
     row_percentiles = intensities[xy_columns].apply(lambda row: np.percentile(row, perc_thres), axis=1)
     non_zero_rows = row_percentiles > 0
     if verbose:
-        print(f'Molecules with {perc_thres}% or more 0 intensity: {intensities.loc[~non_zero_rows,'mol_formula'].values}')
+        print(f'Molecules with {perc_thres}% or more 0 intensity: {intensities.loc[~non_zero_rows,"mol_formula"].values}')
     intensities = intensities[non_zero_rows]
     
     intensities = intensities[xy_columns+['mz']]
@@ -85,7 +87,7 @@ def createAdata_maldi_from_metaspace(intensities,annotations):
     
 
     ####For visualization purpose, when need to compare hearmaps of the same molecule across different samples, should unify rangeMax first
-    adata.var['rangeMax'] = np.percentile(adata.X,99,axis=0)#GET RID OF OUTLIERS#np.max(adata.X,axis=0)
+    adata.varm['rangeMax'] = np.percentile(adata.X,99,axis=0)#GET RID OF OUTLIERS#np.max(adata.X,axis=0)
     
     print(f'adata shape: {adata.X.shape}')
     return adata
@@ -175,7 +177,7 @@ def overlay_images_with_affine(base_img, base_name, *args,bgr=False,plot=False):
     # Ensure the affine matrix is 2x3 for cv2.warpAffine by taking the first two rows and 1,2,4-th columns
     transformed_images = []
     for transform_img, transform_name, affine_matrix in args:
-        transformed_img = transform_image_cv2(base_img, transform_img, affine_matrix)
+        transformed_img = transform_image_single(base_img, transform_img, affine_matrix)
         transformed_images.append((transformed_img, transform_name))
 
     if plot:
@@ -294,7 +296,7 @@ def phenoAdata(df,show=False):
 
     # Reset index to move 'cluster' from index to column
     df_mean = df_mean.reset_index(drop=True)
-
+    
     # Make heatmap
     if show:
         sns_plot = sns.clustermap(df_mean.drop(columns=['cluster', 'count']), 
@@ -319,6 +321,7 @@ def phenoAdata(df,show=False):
     df['metacluster'] = df['cluster'].map(cluster_to_metacluster)
 
     df_mean_meta = df.drop(columns='cluster').groupby(['metacluster']).mean()
+    
     if show:
         sns_plot = sns.clustermap(df_mean_meta, z_score=1, cmap="vlag", center=0,xticklabels=True, yticklabels=True)
         
@@ -329,14 +332,20 @@ def phenoAdata(df,show=False):
 
 ######################## Differential Analysis
 
-def plot_volcano(differential_results, df, metacluster, dominant_variables=None):
-    log2_fold_change = np.log2(df.groupby('metacluster').mean().loc[metacluster]) - np.log2(df.groupby('metacluster').mean().drop(index=metacluster).mean())
+def plot_volcano(differential_results, df_mean_meta, metacluster, dominant_variables=None, id_to_name=None):
     
+    # Calculate log2 fold change
+    offset = abs(df_mean_meta.min().min()) + 1e-10  # Smallest value + small constant
+    log2_fold_change = np.log2(df_mean_meta.loc[metacluster] + offset) - np.log2(df_mean_meta.drop(index=metacluster).mean() + offset)
+
+    # Safely calculate -log10 of p-values
     p_values = differential_results[metacluster]
     minus_log10_p_values = -np.log10(p_values)
-    # Trim the infinity to 2 * max number
-    minus_log10_p_values[minus_log10_p_values == np.inf] = 1.1 * minus_log10_p_values[minus_log10_p_values != np.inf].max()
-
+    max_finite_p = np.nanmax(minus_log10_p_values[np.isfinite(minus_log10_p_values)])  # Max finite p-value
+    minus_log10_p_values[minus_log10_p_values == np.inf] = 1.1 * max_finite_p  # Cap inf values in p-values
+    
+    
+    # Plot volcano plot
     plt.figure(figsize=(10, 6))
     plt.scatter(log2_fold_change, minus_log10_p_values, alpha=0.5)
     plt.xlabel('Log2 Fold Change')
@@ -344,16 +353,30 @@ def plot_volcano(differential_results, df, metacluster, dominant_variables=None)
     plt.title(f'Volcano Plot for Metacluster {metacluster}')
 
     # Highlight dominant variables
-    if dominant_variables is not None:
-        for i,gene in enumerate(dominant_variables[metacluster]):
-            plt.scatter(log2_fold_change[gene], minus_log10_p_values[gene], color='red')
-            plt.text(log2_fold_change[gene], minus_log10_p_values[gene], gene, fontsize=9)
-        
+    # if dominant_variables is not None:
+    #     for gene in dominant_variables[metacluster]:
+    #         plt.scatter(log2_fold_change[gene], minus_log10_p_values[gene], color='red')
+    #         label = id_to_name[gene] if id_to_name is not None else gene
+    #         plt.text(log2_fold_change[gene], minus_log10_p_values[gene], label, fontsize=9)
+
+    # Hightlight variables with mapping that contain 'Cer' or 'SM'
+    if id_to_name is not None:
+        for gene in df_mean_meta.columns:
+            if gene in id_to_name.keys():
+                for isomer in id_to_name[gene]:
+                    if len(isomer) > 20:
+                        isomer = isomer.split('-')[-1]
+                    if 'Cer' in isomer or 'SM' in isomer:
+                        plt.scatter(log2_fold_change[gene], minus_log10_p_values[gene], color='red')
+                        plt.text(log2_fold_change[gene], minus_log10_p_values[gene], isomer, fontsize=9)
+                        break
+            else:
+                print(f'No annotation mapping found for {gene}')
     plt.show()
 
     return log2_fold_change, minus_log10_p_values
 
-def diffAnalysis(df, top_n, heatmap=False):
+def diffAnalysis(df, top_n, id_to_name=None,heatmap=False):
     #drop NA rows of 'metacluster' column
     df.dropna(subset=['metacluster'], inplace=True)
     
@@ -402,7 +425,7 @@ def diffAnalysis(df, top_n, heatmap=False):
 
     unique_metaclusters = df['metacluster'].unique()
     for i in unique_metaclusters:
-        plot_volcano(differential_results, df_mean_meta, i, dominant_variables=dominant_variables)
+        plot_volcano(differential_results, df_mean_meta, i, dominant_variables=dominant_variables,id_to_name=id_to_name)
     
     return differential_results, dominant_variables
 

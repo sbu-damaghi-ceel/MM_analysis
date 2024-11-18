@@ -22,26 +22,47 @@ import math
 from functools import reduce
 '''combine and then phenotyping main function'''
 
-def combine_pheno_main(adata_list, spheroid_names,spatial_key,Harmony=False,spot_size=1):
-    
-    #spheroid_names = [re.search(r'[^/]+(?=\.h5ad)',adata_path).group() for adata_path in control_path_list]
-    # Initialize lists to store AnnData objects and molecule names
-    
-    mol_list = None
+def combine_pheno_main(adata_list, spheroid_names,spatial_key,\
+                       mol_list=None,Harmony=False,normalize=None,\
+                        spot_size=1,num_cols = 5):
+    '''
+    normalize: str, optional (default: None). 
+        When None, no normalization by slide is performed, absolute intensity is used for clustering
+        When 'max', the data is divided by the maximum value of rangeMax in AnnData.varm. 
+        When 'zscore', the data is z-score normalized.
+    '''
+    common_mol = None
 
     # Load AnnData objects and determine common molecules
     for adata_spheroid in adata_list:
         
         print(f'spheroid size: {adata_spheroid.obsm[spatial_key][:,0].max()}*{adata_spheroid.obsm[spatial_key][:,1].max()} pixel^2')
         # Get common molecule list
-        if mol_list is None:
-            mol_list = set(adata_spheroid.var_names)
+        if common_mol is None:
+            common_mol = set(adata_spheroid.var_names)
         else:
-            mol_list.intersection_update(set(adata_spheroid.var_names))
+            common_mol.intersection_update(set(adata_spheroid.var_names))
+    if mol_list is None:
+        mol_list = list(common_mol)
+    else:
+        mol_list = list(set(mol_list).intersection(common_mol))
 
-    # Convert mol_list back to a list
-    mol_list = list(mol_list)
-
+    if normalize:
+        adata_list = [
+            adata.copy() for adata in adata_list  # Make copies to avoid altering original data
+        ]
+        for adata in adata_list:
+            if normalize == 'max':
+                if 'rangeMax' in adata.varm:
+                    adata.X = adata.X / adata.varm['rangeMax']
+                else:
+                    print('No rangeMax found in AnnData.varm. Adopted zscore normalization instead.')
+                    sc.pp.scale(adata)
+            elif normalize == 'zscore':
+                sc.pp.scale(adata)
+            else:
+                raise ValueError('Invalid normalization method. Please choose from "max" or "zscore"')
+                
     # Subset the AnnData objects to the common molecules
     adata_list = [adata[:,mol_list] for adata in adata_list]
 
@@ -52,8 +73,10 @@ def combine_pheno_main(adata_list, spheroid_names,spatial_key,Harmony=False,spot
     adata_all.obs['Spheroid'] = adata_all.obs['Spheroid'].astype('category')
 
     if 'rangeMax' in adata_list[0].varm:
-        adata_all.varm['rangeMax'] = reduce(np.maximum, [adata_spheroid.varm['rangeMax'] for \
-                                                    adata_spheroid in adata_list])
+        # adata_all.varm['rangeMax'] = reduce(np.maximum, [adata_spheroid.varm['rangeMax'] for \
+        #                                             adata_spheroid in adata_list])
+        rangeMax_all = {spheroid: adata.varm['rangeMax'] for spheroid, adata in zip(spheroid_names, adata_list)}
+        adata_all.uns['rangeMax_all'] = rangeMax_all  # Store as a dictionary in uns
 
     # Features in Umap
     sc.tl.pca(adata_all, n_comps=min(100,adata_all.n_vars-1))
@@ -85,33 +108,51 @@ def combine_pheno_main(adata_list, spheroid_names,spatial_key,Harmony=False,spot
     color_map = {category: colors[i] for i, category in enumerate(phenotype_categories)}
 
     num_spheroids = len(spheroid_names)
-    num_cols = 5
+    
     num_rows = math.ceil(num_spheroids / num_cols)
 
-    # Create subplots
-    fig, axs = plt.subplots(num_rows, num_cols, figsize=(5*num_cols, 5*num_rows))
+    # # Create subplots
+    # fig, axs = plt.subplots(num_rows, num_cols, figsize=(5*num_cols, 5*num_rows))
 
-    # Flatten the axs array for easy iteration
-    axs = axs.flatten()
+    # # Flatten the axs array for easy iteration
+    # axs = axs.flatten()
 
-    for i, sph_name in enumerate(sorted(spheroid_names)):
-        ax = axs[i]
-        sc.pl.spatial(adata_all[adata_all.obs['Spheroid'] == sph_name], 
-                      basis=spatial_key,
-                      color='phenotype', 
-                      spot_size=spot_size, 
-                      palette=color_map,
-                      frameon=False,
-                      ax=ax,
-                      show=False)
-        ax.set_title(sph_name)  
+    # for i, sph_name in enumerate(sorted(spheroid_names)):
+    #     ax = axs[i]
+    #     sc.pl.spatial(adata_all[adata_all.obs['Spheroid'] == sph_name], 
+    #                   basis=spatial_key,
+    #                   color='phenotype', 
+    #                   spot_size=spot_size, 
+    #                   palette=color_map,
+    #                   frameon=False,
+    #                   ax=ax,
+    #                   show=False)
+    #     ax.set_title(sph_name)  
 
-    # Hide any unused subplots
-    for j in range(i+1, len(axs)):
-        fig.delaxes(axs[j])
+    # # Hide any unused subplots
+    # for j in range(i+1, len(axs)):
+    #     fig.delaxes(axs[j])
 
-    plt.tight_layout()
-    plt.show()
+    # plt.tight_layout()
+    # plt.show()
+
+    # Iterate over each spheroid name and plot individually
+    for sph_name in sorted(spheroid_names):
+        fig, ax = plt.subplots(figsize=(5, 5))
+        
+        sc.pl.spatial(
+            adata_all[adata_all.obs['Spheroid'] == sph_name], 
+            basis=spatial_key,
+            color='phenotype', 
+            spot_size=spot_size, 
+            palette=color_map,
+            frameon=False,
+            ax=ax,
+            show=False
+        )
+        
+        ax.set_title(sph_name)
+        plt.show()
     return adata_all, df
 
 

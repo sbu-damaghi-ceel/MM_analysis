@@ -538,14 +538,39 @@ def dist2Bdry_plot_main(image_dict,distance_threshold,pixel_len=20,keys=None):
     plt.tight_layout()
     return fig,axs
 
+##########################################Coreg utilities
+def transform_image_single(target_shape, transform_img, affine_matrix):
+    affine_matrix_2x3 = affine_matrix[:2, [0, 1, 3]]
+    # rows, cols = target_img.shape[:2]
+    rows, cols = target_shape
+    transformed_img = cv2.warpAffine(transform_img, affine_matrix_2x3, (cols, rows))
+    return transformed_img
 
+def apply_multiple_3x4_matrices(matrix_list):
+    """
+    Applies a series of 3x4 transformation matrices in the specified order.
+    
+    Parameters:
+    - matrix_list: list of np.array, each of shape (3, 4), representing transformation matrices in the order they should be applied.
+    
+    Returns:
+    - result_matrix: np.array of shape (3, 4), the combined transformation matrix.
+    """
+    # Convert each 3x4 matrix to 4x4 by adding a row [0, 0, 0, 1]
+    matrix_list_4x4 = [np.vstack([matrix, [0, 0, 0, 1]]) for matrix in matrix_list]
+
+    # Start with the last matrix in the list and apply matrices in reverse order since the matrix on the rightmost is multiplied first with the (x,y) array
+    result_4x4 = matrix_list_4x4[-1]
+    for matrix in reversed(matrix_list_4x4[:-1]):
+        result_4x4 = result_4x4 @ matrix
+
+    result_matrix = result_4x4[:3, :4]
+    return result_matrix
 
 ##########################################Tuple format to store image data
-def get_image_tuple_and_save_h5(adata, spatial_key, h5_filename=None, molecule_list=None, verbose=False):
+def get_image_tuple(adata, spatial_key, h5_filename=None, molecule_list=None, verbose=False):
     if molecule_list is None:
         molecule_list = list(adata.var_names)
-
-    
     images = []
     max_values = []
 
@@ -558,18 +583,36 @@ def get_image_tuple_and_save_h5(adata, spatial_key, h5_filename=None, molecule_l
             print(f'Molecule {molecule} done')
 
     image_array = np.stack(images)
-
-    if h5_filename is not None:
-
-        with h5py.File(h5_filename, 'w') as hf:
-            
-            hf.create_dataset('images', data=image_array)
-            hf.create_dataset('molecule_names', data=np.array(molecule_list, dtype='S'))  # Save molecule names as bytes
-            hf.create_dataset('max_values', data=np.array(max_values))
-
-        print(f"Data successfully saved in {h5_filename}")
     image_tuple = (image_array, molecule_list, max_values)
+    if h5_filename is not None:
+        save_image_tuple(image_tuple, h5_filename)
     return image_tuple
+def save_image_tuple(image_tuple, h5_filename):
+    image_array, molecule_list, max_values = image_tuple
+    with h5py.File(h5_filename, 'w') as hf:
+        
+        hf.create_dataset('images', data=image_array)
+        hf.create_dataset('molecule_names', data=np.array(molecule_list, dtype='S'))  # Save molecule names as bytes
+        hf.create_dataset('max_values', data=np.array(max_values))
+
+    print(f"Data successfully saved in {h5_filename}")
+    return
+def load_image_tuple(h5_filename,load='all'):
+    with h5py.File(h5_filename, 'r') as hf:
+        if load == 'images':
+            return hf['images'][:]
+        elif load == 'molecule_names':
+            return [m.decode('utf-8') for m in hf['molecule_names'][:]]  # Decode bytes to strings
+        elif load == 'max_values':
+            return hf['max_values'][:]
+        elif load == 'all':
+            image_array = hf['images'][:]
+            molecule_list = [m.decode('utf-8') for m in hf['molecule_names'][:]]
+            max_values = hf['max_values'][:]
+            return (image_array, molecule_list, max_values)
+        else:
+            raise ValueError("Invalid value for 'load'. Must be 'all', 'images', 'molecule_names', or 'max_values'.")
+
 def getForegroundMask_tuple(image_tuple,plot_flag=False):
     image_array, molecule_list, max_values = image_tuple
     
@@ -608,7 +651,19 @@ def getForegroundMask_tuple(image_tuple,plot_flag=False):
     distances_flat = distances_array[mask].flatten()
 
     return mask, common_boundary,distances_flat
-def coreg_merge_img_tuple(base_tuple,coreg_tuple,coreg_affine_matrix):
+
+
+
+def transform_image_tuple(target_shape, image_tuple, affine_matrix):
+    image_array, molecule_list, max_values = image_tuple
+    transformed_images = []
+    for i in range(image_array.shape[0]):
+        normalized_image = image_array[i] / max_values[i] # Normalize for the cv2 format
+        transformed_image = transform_image_single(target_shape, normalized_image, affine_matrix)
+        transformed_images.append(transformed_image*max_values[i])  # Denormalize after transformation
+    return np.stack(transformed_images), molecule_list, max_values
+
+def coreg_merge_img_tuple(base_tuple,coreg_tuple,coreg_affine_matrix,replace=False,plot=False):
                         
     base_image_array, base_molecule_list, base_max_values = base_tuple
     coreg_image_array, coreg_molecule_list, coreg_max_values = coreg_tuple
@@ -616,16 +671,50 @@ def coreg_merge_img_tuple(base_tuple,coreg_tuple,coreg_affine_matrix):
     
     target_height, target_width = base_image_array[0].shape[:2] 
     for i in range(coreg_image_array.shape[0]):
-        if coreg_molecule_list[i] in base_molecule_list:
+        if not replace and coreg_molecule_list[i] in base_molecule_list:
             print(f'Duplicate molecule {coreg_molecule_list[i]} found in coregistered image. Skipping...')
             continue
+            
         # Resize the coregistered image to match the base image
         affine_matrix_2x3 = coreg_affine_matrix[:2, [0, 1, 3]]
         coreg_image = coreg_max_values[i]*cv2.warpAffine(coreg_image_array[i]/coreg_max_values[i], \
                                      affine_matrix_2x3, (target_width, target_height))
-        base_image_array = np.append(base_image_array, coreg_image[np.newaxis, ...], axis=0)
-        base_molecule_list.append(coreg_molecule_list[i])
-        base_max_values.append(coreg_max_values[i])
+        if replace and coreg_molecule_list[i] in base_molecule_list:
+            idx = base_molecule_list.index(coreg_molecule_list[i])
+            base_image_array[idx] = coreg_image
+            print(f'Overwriting molecule {coreg_molecule_list[i]}')
+        else:
+            base_image_array = np.append(base_image_array, coreg_image[np.newaxis, ...], axis=0)
+            base_molecule_list.append(coreg_molecule_list[i])
+            base_max_values.append(coreg_max_values[i])
+    if plot :
+        example_idx = 0
+        base_image = base_image_array[0]  # For demonstration, using first base image as example
+        original_image = coreg_image_array[example_idx]
+        normalized_image = original_image / coreg_max_values[example_idx]
+        converted_image = cv2.warpAffine(normalized_image, affine_matrix_2x3, (target_width, target_height))
+        
+        # Plot the images
+        fig, axes = plt.subplots(1, 4, figsize=(16, 4))
+        axes[0].imshow(base_image, cmap='Blues')
+        axes[0].set_title("Base Image")
+        axes[0].axis('off')
+
+        axes[1].imshow(original_image, cmap='Reds')
+        axes[1].set_title("Original Coregistered Image")
+        axes[1].axis('off')
+
+        axes[2].imshow(converted_image, cmap='Reds')
+        axes[2].set_title("Converted Image (Warped)")
+        axes[2].axis('off')
+
+        axes[3].imshow(base_image, cmap='Blues', alpha=0.5)
+        axes[3].imshow(converted_image, cmap='Reds', alpha=0.5)
+        axes[3].set_title("Overlay of Base and Converted Image")
+        axes[3].axis('off')
+
+        plt.tight_layout()
+        plt.show()
     return base_image_array, base_molecule_list, base_max_values
 
 def restore_anndata_from_tuple(image_tuple,spatial_key,molecule_names=None):
