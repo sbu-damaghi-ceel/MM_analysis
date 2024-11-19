@@ -184,29 +184,38 @@ def plot_boxplot_stripplot_with_images_singleRow(ax, title,names, distributions,
         jitter=True, color='black', size=4, alpha=0.8
     )
 
-    ax.set_title(title, fontsize=16)
+    
     ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
     ax.set_ylabel('Value')
     ax.set_xlabel('Group')
 
+    bbox = ax.get_window_extent()
+    axis_aspect_ratio = bbox.width / bbox.height # need to also consider the aspect ratio of the axis because they can represent different pixel sizes
+
     num_columns = len(names)
-    inset_width = 1 / num_columns  # Adjust the width of each inset
+    group_width = 1 / num_columns  
+    inset_width = group_width * 0.8  
+    inset_y_position = 0.85
 
     for i, name in enumerate(names):
         image = images[i] if i < len(images) else None
         if image is not None:
-            # Calculate position of the inset
-            inset_x_position = i / num_columns 
+            inset_x_position = i / num_columns + group_width * 0.1  # Center inset in the group
             aspect_ratio = image.shape[1] / image.shape[0]
-            inset_height = inset_width / aspect_ratio
-
+            inset_height = inset_width / (aspect_ratio / axis_aspect_ratio)
+            # need to scale the height up if ax_width>ax_height because then 0.01 height is less pixels than 0.01 width 
+            
             inset_ax = ax.inset_axes(
-                [inset_x_position, 1.05, inset_width, inset_height],
-                transform=ax.transAxes
+                [inset_x_position, inset_y_position, inset_width, inset_height],
+                transform=ax.transAxes,
+                clip_on=False #ensure that the inset is not clipped even though it's outside the axis
             )
-            inset_ax.imshow(image)
+            inset_ax.imshow(image,origin='lower') #aspect='auto'
             inset_ax.axis('off')  # Hide axes for the inset
+    #ensure title is above the image
 
+    ax.set_title(title, fontsize=16,pad = 50)
 def plot_boxplots_stripplots(ad_list, ad_names, common_var_names=None, image_dict_list=None):
     """
     For each common molecule, plot a box plot with dots for all AnnData objects in one subplot.
