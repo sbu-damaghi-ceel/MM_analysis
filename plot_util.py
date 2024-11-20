@@ -211,7 +211,7 @@ def plot_boxplot_stripplot_with_images_singleRow(ax, title,names, distributions,
                 transform=ax.transAxes,
                 clip_on=False #ensure that the inset is not clipped even though it's outside the axis
             )
-            inset_ax.imshow(image,origin='lower') #aspect='auto'
+            inset_ax.imshow(image,origin='lower',vmin=0,vmax=1) #aspect='auto' #vmin=0,vmax=1 to ensure the uniform color scale
             inset_ax.axis('off')  # Hide axes for the inset
     #ensure title is above the image
 
