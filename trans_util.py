@@ -59,8 +59,8 @@ def plot_dict(dict_obj,cols,plt_func):
     plt.tight_layout()
     return fig,axes
 
-def plot_multiPoly(ax,multiPoly):
-    patch = shapely.plotting.patch_from_polygon(multiPoly)
+def plot_multiPoly(ax,multiPoly,alpha=0.5,color='blue'):
+    patch = shapely.plotting.patch_from_polygon(multiPoly, alpha=alpha, color=color)
     ax.add_patch(patch)
     ax.autoscale()
     ax.set_aspect('equal', 'box')

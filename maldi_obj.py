@@ -95,7 +95,11 @@ def average_columns(df, group_size=4):
     averaged_df = pd.DataFrame({name: data for name, data in averaged_columns})
 
     return averaged_df
-def createAdata_maldi(df_intensity, df_coordinates,df_feature_list,intensity_format='col'):
+def createAdata_maldi(df_intensity, df_coordinates,df_feature_list,intensity_format='col',thres=95,verbose=False):
+    '''
+    thres: the percentile threshold to remove molecules with {100*thres}% or more 0 intensities
+    OR the number of non-zero pixels < thres 
+    '''
     if intensity_format == 'row':
         #convert 1st column of df_intensity to index
         df_intensity.set_index(df_intensity.columns[0], inplace=True,drop=True)
@@ -114,15 +118,19 @@ def createAdata_maldi(df_intensity, df_coordinates,df_feature_list,intensity_for
     counts.columns.name = 'molecule name'
     counts = counts.loc[:, counts.columns.notnull()] # if mz does not have a corresponding name in feature list, it will be None
     
-    ####remove molecules with 95% or more 0 intensities
-    percentiles = counts.apply(lambda x: np.percentile(x, 95), axis=0)
-    low_intensity_columns = percentiles[percentiles == 0].index
-    for molecule_name in low_intensity_columns:
-        print(f'{molecule_name} is at least 95% 0-intensity')
+    ####remove molecules with 95% or more 0 intensities OR the number of non-zero pixels < thres
+    if thres < 1:
+        percentiles = counts.apply(lambda x: np.percentile(x, thres*100), axis=0)
+        low_intensity_columns = percentiles[percentiles == 0].index
+    else:
+        low_intensity_columns = counts.columns[(counts != 0).sum(axis=0) <= thres]
+    if verbose:
+        for molecule_name in low_intensity_columns:
+            print(f'{molecule_name} does not have enough positive pixels')
     counts_filtered = counts.drop(columns=low_intensity_columns)
     
     if counts_filtered.shape[1] == 0:
-        raise ValueError('All molecules have 95% or more 0-intensities')
+        raise ValueError('All molecules do not have enough positive pixels')
     adata = ad.AnnData(counts_filtered)
     adata.obs_names = counts_filtered.index #index is 'Spot {i}'
     adata.var_names = counts_filtered.columns 
@@ -233,8 +241,7 @@ def restore_anndata(image_dict, spatial_key,molecule_names=None):
     # Populate the intensities and spatial coordinates
     for i,molecule in enumerate(molecule_names):
         image, max_intensity = image_dict[molecule]
-        
-        # Record the max intensity
+      
         range_max_list.append(max_intensity)
         
         # Only consider pixels inside the mask
@@ -274,11 +281,11 @@ def plot_images_single(ax,image,rangeMax,key,pixel_length=20):
     scalebar = ScaleBar(20, 'um', location='lower right',box_alpha=0,color='white')#'μm'
     ax.add_artist(scalebar)
     
-def plot_images_main(image_dict, cols, keys=None):
+def plot_images_main(image_dict, cols, keys=None,show=False):
     #PLOT INDIVIDUAL IMAGES FOR EVERY KEY
     if keys is None:
         keys = list(image_dict.keys())
-
+    keys = sorted(keys)
     # Plot individual images
     n = len(keys)
     cols = min(cols, n)
@@ -292,8 +299,9 @@ def plot_images_main(image_dict, cols, keys=None):
     for j in range(n, rows * cols):
         axs.flat[j].axis('off')
     plt.tight_layout()
-    #plt.show()
-    return fig,axs
+    if not show:
+        return fig,axs
+    plt.show()
 def get_pair_colocalization_score(image_dict,key1,key2):
     # Calculate colocalization_score using Pearson correlation coefficient
     image1_flat = image_dict[key1][0].flatten()
@@ -493,45 +501,55 @@ def dist2Bdry_plot_single(image, molecule_name, distances_flat, intensities_flat
     axs[0].plot(xnew, ynew, 'r-', label='Smoothed Curve')
     axs[0].set_xlabel('Distance to Boundary')
     axs[0].set_ylabel('Mean Intensity')
+    xticks = axs[0].get_xticks()
+    xticks_scaled = xticks * pixel_len  # Scale x-ticks by pixel_len
+    axs[0].set_xticks(xticks)
+    axs[0].set_xticklabels(['']+[f"{tick:.0f}" for tick in xticks_scaled[1:-1]]+[''])
     #axs[0].set_title(f'Mean Intensity per Distance Bin for {molecule_name}')
     axs[0].legend()
 
     distances_less_than_threshold = intensities_flat[distances_flat < distance_threshold]
     distances_greater_than_threshold = intensities_flat[distances_flat >= distance_threshold]
-    t_stat, p_value = ttest_ind(distances_less_than_threshold, distances_greater_than_threshold, equal_var=False)
-    #t test
-    p_val_color = 'red' if p_value < 1e-4 else 'black'
-    axs[1].text(1.5, max(np.max(distances_less_than_threshold), np.max(distances_greater_than_threshold)), 
-    f'p = {p_value:.2e}', color=p_val_color, horizontalalignment='center', verticalalignment='top')
-
+    
     data_to_plot = [distances_less_than_threshold, distances_greater_than_threshold]
-    axs[1].boxplot(data_to_plot, patch_artist=True)
+    axs[1].boxplot(data_to_plot, showfliers = False,patch_artist=True)
     axs[1].set_xticklabels([f'< {distance_threshold*pixel_len} µms', f'>= {distance_threshold*pixel_len} µms'])
     #axs[1].set_title('Intensity Distribution by Distance Threshold')
     axs[1].set_ylabel('Intensity')
+    t_stat, p_value = ttest_ind(distances_less_than_threshold, distances_greater_than_threshold, equal_var=False)
+    #t test
+    p_val_color = 'red' if p_value < 1e-4 else 'black'
+    axs[1].text(1.5, axs[1].get_ylim()[1] * 0.9,
+    f'p = {p_value:.2e}', color=p_val_color, horizontalalignment='center', verticalalignment='top')
+
 
     axs[2].imshow(image, cmap='jet',vmin=0,vmax=255)##Ensure the color range is uniform for different images of the same molecule
     polygon_points = np.array(common_boundary.exterior.coords)
     axs[2].plot(polygon_points[:, 0], polygon_points[:, 1], 'r-', linewidth=2) 
-    axs[2].fill(polygon_points[:, 0], polygon_points[:, 1], 'r', alpha=0.3) 
+    #axs[2].fill(polygon_points[:, 0], polygon_points[:, 1], 'r', alpha=0.3) 
     inner_points = np.array(common_boundary.buffer(-distance_threshold).exterior.coords)
-    axs[2].plot(inner_points[:, 0], inner_points[:, 1], 'r-', linewidth=2) 
-    axs[2].fill(inner_points[:, 0], inner_points[:, 1], 'r', alpha=0.2) 
+    axs[2].plot(inner_points[:, 0], inner_points[:, 1], 'y-', linewidth=2) 
+    #axs[2].fill(inner_points[:, 0], inner_points[:, 1], 'r', alpha=0.2) 
     axs[2].set_title(f'{molecule_name}')
 
         
 
 def dist2Bdry_plot_main(image_dict,distance_threshold,pixel_len=20,keys=None):
-    if keys is not None:
-        image_dict = {key:image_dict[key] for key in keys}
+    if keys is None:
+        keys = list(image_dict.keys())
+    keys = sorted(keys)
+    
+    image_dict = {key:image_dict[key] for key in keys}
     mask,common_boundary,distances_flat = getForegroundMask(image_dict)
     common_boundary_points = np.array(common_boundary.exterior.coords)
 
     fig, axs = plt.subplots(len(image_dict), 3, figsize=(12, 3 * len(image_dict)))
     if len(axs) == 1:
         axs = np.expand_dims(axs, axis=0)  # Ensure axs is 2D for uniform handling
+    for idx,key in enumerate(keys):
+        molecule_name = key
+        (image,max) = image_dict[key]
     
-    for idx,(molecule_name, (image,max)) in enumerate(image_dict.items()):
         axs_row = axs[idx,:]
         intensities_flat = image[mask].flatten()
         dist2Bdry_plot_single(image, molecule_name, distances_flat, intensities_flat, distance_threshold, common_boundary, pixel_len, axs_row)

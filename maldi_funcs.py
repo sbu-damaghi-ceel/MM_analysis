@@ -14,9 +14,7 @@ import xml.etree.ElementTree as ET
 from .maldi_obj import create_intensity_image
 
 
-from pyFlowSOM import map_data_to_nodes, som
-from .consensusClustering import ConsensusCluster
-from sklearn.cluster import AgglomerativeClustering
+
 
 
 from scipy.stats import ttest_ind
@@ -271,62 +269,7 @@ def merge_anndata_on_spatial(adata1, col1,adata2,col2):
     
     return new_adata
 ######################## Phenotypying
-## Use 2 phase clustering to identify phenotypes
-def phenoAdata(df,show=False):
-    
-    som_input_arr = df.to_numpy()
-    # # train the SOM
-    node_output = som(som_input_arr, xdim=10, ydim=10, rlen=10)
-
-    # # use trained SOM to assign clusters to each observation in your data
-    clusters, dists = map_data_to_nodes(node_output, som_input_arr)
-
-    eno = pd.DataFrame(data=node_output, columns=df.columns)
-    eco = pd.DataFrame(data=clusters, columns=["cluster"])
-
-
-    # Append results to the input data
-    df['cluster'] = clusters
-
-    # Find mean of each cluster
-    df_mean = df.groupby(['cluster']).mean()
-
-    df_mean['cluster'] = df_mean.index
-    df_mean['count'] = df['cluster'].value_counts().sort_index().values
-
-    # Reset index to move 'cluster' from index to column
-    df_mean = df_mean.reset_index(drop=True)
-    
-    # Make heatmap
-    if show:
-        sns_plot = sns.clustermap(df_mean.drop(columns=['cluster', 'count']), 
-                                  z_score=1, cmap="vlag", center=0,xticklabels=True, yticklabels=True)
-        
-        #sns_plot.figure.savefig(f"example_cluster_heatmap.png")
-
-    cc = ConsensusCluster(
-                cluster=AgglomerativeClustering,
-                L=5,
-                K=20,
-                H=10,
-                resample_proportion=0.8
-            )
-    cc.fit(df_mean.drop(columns=['cluster', 'count']).values)
-    print(f'consensus clustering best number of clusters: {cc.bestK}')
-    df_mean['metacluster'] = cc.predict()
-
-    cluster_to_metacluster = df_mean['metacluster'].to_dict()
-
-    # Add metacluster column to the original df
-    df['metacluster'] = df['cluster'].map(cluster_to_metacluster)
-
-    df_mean_meta = df.drop(columns='cluster').groupby(['metacluster']).mean()
-    
-    if show:
-        sns_plot = sns.clustermap(df_mean_meta, z_score=1, cmap="vlag", center=0,xticklabels=True, yticklabels=True)
-        
-        #sns_plot.figure.savefig(f"example_metacluster_heatmap.png")
-    return df
+#from MM_analysis.util_pheno import phenoAdata
     
 
 

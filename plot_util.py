@@ -22,6 +22,17 @@ def calculate_gene_distance_correlations(adata):
     gene_names = adata.var.index
     return pd.Series(correlation_results, index=gene_names)
 
+
+def plot_heatmap_adata(adata):
+    if hasattr(adata, "X") and isinstance(adata.X, (pd.DataFrame, np.ndarray)):
+        data = pd.DataFrame(adata.X, columns=adata.var_names)
+    else:
+        raise ValueError("AnnData object must have a valid data matrix in 'X'.")
+
+    # Compute the correlation matrix
+    correlation_df = data.corr()
+    plot_heatmap(correlation_df)
+
 def plot_heatmap(correlation_df):
     avg_correlations = correlation_df.mean(axis=1)
     sorted_genes = avg_correlations.sort_values(ascending=False).index
@@ -333,3 +344,7 @@ def plot_unified_image_dict(ad_list,ad_names,common_var_names=None):
                     cbar_ticks = cbar.get_ticks()  # Get current ticks
                     cbar.set_ticks(cbar_ticks)  # Set the same ticks
                     cbar.set_ticklabels([f'{tick * rangeMax:.2f}' for tick in cbar_ticks])  # Scale by rangeMax
+'''
+Whenever trying to unify the color bar for multiple images, besides normalizing with the common rangeMax
+always specify vmin and vmax in the imshow function
+'''
