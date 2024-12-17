@@ -110,13 +110,9 @@ def plot_spatial_subplots(adata, spot_size=1, ncols=5):
     plt.tight_layout()
     plt.show()
 
-######################## 
-# Co-registration
-'''Co-registration related functions'''
+######################## Co-registration
+# from .coreg_util import *
 
-import cv2
-import numpy as np
-import matplotlib.pyplot as plt
 
 
 
@@ -133,141 +129,7 @@ def create_channel_image(image, channel):
     rgb_image[:, :, channel] = image
 
     return rgb_image
-def readXML_affine_matrix(xml_file_path):
-    identity_transform = np.array([[1., 0., 0., 0.],
-                                    [0., 1., 0., 0.],
-                                    [0., 0., 1., 0.]])
-    tree = ET.parse(xml_file_path)
-    root = tree.getroot()
-    # Assume only one image is transformed, the other remains the same(identity_matrix)
-    for transform in root.findall('.//ManualSourceTransforms/SourceTransform'):
-        affine_text = transform.find('affine').text
-        affine_values= [float(val) for val in affine_text.split()]
-        affine_matrix = np.array(affine_values).reshape(3,4)
-        
-        if not np.array_equal(affine_matrix, identity_transform):
-            return affine_matrix
-    #If no affine matrix found, return identity matrix
-    return identity_transform
 
-def transform_image_single(base_img, transform_img, affine_matrix):
-    affine_matrix_2x3 = affine_matrix[:2, [0, 1, 3]]
-    rows, cols, _ = base_img.shape
-    transformed_img = cv2.warpAffine(transform_img, affine_matrix_2x3, (cols, rows))
-    return transformed_img
-
-def overlay_images_with_affine(base_img, base_name, *args,bgr=False,plot=False):
-    """
-    Overlay images with affine transformations.
-
-    Parameters:
-        base_img (numpy.ndarray): The base image.
-        base_name (str): The name of the base image.
-        bgr (bool): Whether the images are in BGR format.
-        *args: Arbitrary number of tuples each containing (transform_img, transform_name, affine_matrix).
-
-    """
-    # Convert BGR (OpenCV format, from cv2.imread) to RGB (matplotlib format)
-    if bgr:
-        base_img = cv2.cvtColor(base_img, cv2.COLOR_BGR2RGB)
-        args = [(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), name, affine) for img, name, affine in args]
-
-    # Ensure the affine matrix is 2x3 for cv2.warpAffine by taking the first two rows and 1,2,4-th columns
-    transformed_images = []
-    for transform_img, transform_name, affine_matrix in args:
-        transformed_img = transform_image_single(base_img, transform_img, affine_matrix)
-        transformed_images.append((transformed_img, transform_name))
-
-    if plot:
-        # Plot the images separately and overlayed together
-        fig, ax = plt.subplots(1, len(transformed_images) + 2, figsize=(4 * (len(transformed_images) + 2), 4))
-        ax[0].imshow(base_img)
-        ax[0].set_title(base_name)
-        ax[0].axis('off')
-
-        for i, (transformed_img, transform_name) in enumerate(transformed_images):
-            ax[i + 1].imshow(transformed_img)
-            ax[i + 1].set_title(f'Transformed {transform_name}')
-            ax[i + 1].axis('off')
-
-        ax[-1].imshow(base_img, alpha=0.5)
-        for transformed_img, _ in transformed_images:
-            ax[-1].imshow(transformed_img, alpha=0.3)
-        ax[-1].set_title(f'Overlay of {base_name} and Transformed Images')
-        ax[-1].axis('off')
-
-        plt.show()
-
-    return transformed_images
-
-
-def visualize_coreg(parent_dir,adata_cer,adata_met,adata_sm,affine_matrix_met,affine_matrix_sm,show='generated'):
-    if show == 'generated':
-        #IMAGES generated from intensity data(the first molecule)
-        cer_gray,_ = create_intensity_image(adata_cer,adata_cer.var_names[0],spatial_key='spatial')
-        cer_img = create_channel_image(cer_gray, 0)
-        met_gray,_ = create_intensity_image(adata_met,adata_met.var_names[0],spatial_key='spatial')
-        met_img = create_channel_image(met_gray, 1)
-        sm_gray,_ = create_intensity_image(adata_sm,adata_sm.var_names[0],spatial_key='spatial')
-        sm_img = create_channel_image(sm_gray, 2)
-
-        overlay_images_with_affine(cer_img, 'cer',(met_img,'met',affine_matrix_met),\
-                                   (sm_img,'sm',affine_matrix_sm))
-        
-    elif show == 'metaspace':
-        #images downloaded from METASPACE
-        cer_img = cv2.imread(join(parent_dir,'coreg','Cer.png'))
-        met_img = cv2.imread(join(parent_dir,'coreg','Met.png'))
-        sm_img = cv2.imread(join(parent_dir,'coreg','SM.png'))
-        
-        
-        overlay_images_with_affine(cer_img, 'cer',(met_img,'met',affine_matrix_met),\
-                                   (sm_img,'sm',affine_matrix_sm),bgr=True)
-    else:
-        print('Invalid show option, should be either "generated" or "metaspace"')
-        return
-
-def merge_anndata_on_spatial(adata1, col1,adata2,col2):
-    spatial1 = adata1.obsm[col1].astype(int)
-    spatial2 = adata2.obsm[col2]
-    
-    df_spatial1 = pd.DataFrame(spatial1, columns=['x', 'y'])
-    df_spatial2 = pd.DataFrame(spatial2, columns=['x', 'y'])
-    
-
-    df_spatial1['index1'] = df_spatial1.index
-    df_spatial2['index2'] = df_spatial2.index
-    
-    # Merge the dataframes on spatial coordinates
-    merged_df = pd.merge(df_spatial1, df_spatial2, on=['x', 'y'], how='left')
-    
-    new_X = []
-    obs_data = []
-    for idx1, row in merged_df.iterrows():
-        if pd.notna(row['index2']):
-            idx2 = int(row['index2'])
-            new_row = np.concatenate((adata1.X[idx1], adata2.X[idx2]))
-            obs_row = adata2.obs.iloc[idx2].to_dict()
-        else:
-            new_row = np.concatenate((adata1.X[idx1], np.full(adata2.X.shape[1], np.nan)))
-            obs_row = {col: np.nan for col in adata2.obs.columns}
-        new_X.append(new_row)
-        obs_data.append(obs_row)
-    
-    new_X = np.array(new_X)
-    obs_df = pd.DataFrame(obs_data, index=adata1.obs_names)
-    
-    new_adata = ad.AnnData(X=new_X)
-    new_adata.obs_names = adata1.obs_names.copy()
-    new_var_names = np.concatenate((adata1.var_names, adata2.var_names))
-    new_adata.var_names = new_var_names
-    new_adata.var['source'] = ['macsima']*len(adata1.var_names) + ['maldi']*len(adata2.var_names)
-
-    
-    new_adata.obsm = adata1.obsm.copy()
-    new_adata.obs = pd.concat([adata1.obs.add_prefix('macsima_'), obs_df.add_prefix('maldi_')], axis=1)
-    
-    return new_adata
 ######################## Phenotypying
 #from MM_analysis.util_pheno import phenoAdata
     

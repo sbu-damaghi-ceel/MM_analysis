@@ -24,7 +24,7 @@ import math
 from functools import reduce
 '''combine and then phenotyping main function'''
 
-def combine_adata(adata_list, spheroid_names, spatial_key, mol_list=None, normalize=None):
+def combine_adata(adata_list, spheroid_names, spatial_key, label_key = 'Spheroid',mol_list=None, normalize=None):
     common_mol = None
 
     # Load AnnData objects and determine common molecules
@@ -61,10 +61,10 @@ def combine_adata(adata_list, spheroid_names, spatial_key, mol_list=None, normal
     adata_list = [adata[:,mol_list] for adata in adata_list]
 
     # Concatenate AnnData objects while maintaining the correct metadata
-    adata_all = ad.concat(adata_list, merge='same', uns_merge='unique', label='Spheroid', keys=spheroid_names)
+    adata_all = ad.concat(adata_list, merge='same', uns_merge='unique', label=label_key, keys=spheroid_names)
     print(f'Number of cells: {adata_all.n_obs}, Number of molecules: {adata_all.n_vars} ')
     # Ensure that the Spheroid field is in the obs DataFrame
-    adata_all.obs['Spheroid'] = adata_all.obs['Spheroid'].astype('category')
+    adata_all.obs[label_key] = adata_all.obs[label_key].astype('category')
 
     if 'rangeMax' in adata_list[0].varm:
         # adata_all.varm['rangeMax'] = reduce(np.maximum, [adata_spheroid.varm['rangeMax'] for \
@@ -73,7 +73,15 @@ def combine_adata(adata_list, spheroid_names, spatial_key, mol_list=None, normal
         adata_all.uns['rangeMax_all'] = rangeMax_all  # Store as a dictionary in uns
     return adata_all
 ## Use 2 phase clustering to identify phenotypes
-def phenoAdata(df,show=False):
+def phenoAdata(input_data,show=False,output_mean=False):
+    if isinstance(input_data, pd.DataFrame):
+        # Input is already a DataFrame
+        df = input_data
+    elif isinstance(input_data, ad.AnnData):
+        # Input is an AnnData object, extract X matrix and var_names
+        df = pd.DataFrame(data=input_data.X.astype(np.float64), columns=input_data.var_names)
+    else:
+        raise TypeError("Input must be a DataFrame or an AnnData object.")
     
     som_input_arr = df.to_numpy()
     # # train the SOM
@@ -120,34 +128,34 @@ def phenoAdata(df,show=False):
 
     # Add metacluster column to the original df
     df['metacluster'] = df['cluster'].map(cluster_to_metacluster)
-
-    df_mean_meta = df.drop(columns='cluster').groupby(['metacluster']).mean()
+    if isinstance(input_data, ad.AnnData):
+        input_data.obs['phenotype'] = df['metacluster'].astype('category').values
     
     if show:
+        df_mean_meta = df.drop(columns='cluster').groupby(['metacluster']).mean()
         sns_plot = sns.clustermap(df_mean_meta, z_score=1, cmap="vlag", center=0,xticklabels=True, yticklabels=True)
         
         #sns_plot.figure.savefig(f"example_metacluster_heatmap.png")
-    return df
-def plot_phenotype(adata_all, spheroid_names,color_key, spatial_key, spot_size, num_cols,color_map=None):
+    if output_mean:
+        return df,df_mean
+    else:
+        return df
+def plot_phenotype(adata_all,color_key, spatial_key, spot_size, num_cols,label_key='Spheroid',color_map=None):
     
 
     #plot spatial distribution of each metacluster
     if color_map is None:
         color_map = 'viridis'
 
+    spheroid_names = list(adata_all.obs[label_key].unique())
     num_spheroids = len(spheroid_names)
-    
+
     num_rows = math.ceil(num_spheroids / num_cols)
-
-    # # Create subplots
     fig, axs = plt.subplots(num_rows, num_cols, figsize=(5*num_cols, 5*num_rows))
-
-    # Flatten the axs array for easy iteration
     axs = axs.flatten()
-
     for i, sph_name in enumerate(sorted(spheroid_names)):
         ax = axs[i]
-        sc.pl.spatial(adata_all[adata_all.obs['Spheroid'] == sph_name], 
+        sc.pl.spatial(adata_all[adata_all.obs[label_key] == sph_name], 
                     basis=spatial_key,
                     color=color_key, 
                     spot_size=spot_size, 
@@ -169,7 +177,7 @@ def plot_phenotype(adata_all, spheroid_names,color_key, spatial_key, spot_size, 
     #     fig, ax = plt.subplots(figsize=(5, 5))
         
     #     sc.pl.spatial(
-    #         adata_all[adata_all.obs['Spheroid'] == sph_name], 
+    #         adata_all[adata_all.obs[label_key] == sph_name], 
     #         basis=spatial_key,
     #         color=color_key, 
     #         spot_size=spot_size, 
@@ -183,7 +191,7 @@ def plot_phenotype(adata_all, spheroid_names,color_key, spatial_key, spot_size, 
     #     plt.show()
     
 
-def combine_pheno_main(adata_list, spheroid_names,spatial_key,\
+def combine_pheno_main(adata_list, spheroid_names,spatial_key,label_key = 'Spheroid',\
                        mol_list=None,Harmony=False,normalize=None,\
                         spot_size=1,num_cols = 5):
     '''
@@ -192,20 +200,20 @@ def combine_pheno_main(adata_list, spheroid_names,spatial_key,\
         When 'max', the data is divided by the maximum value of rangeMax in AnnData.varm. 
         When 'zscore', the data is z-score normalized.
     '''
-    adata_all = combine_adata(adata_list, spheroid_names, spatial_key, mol_list=mol_list, normalize=normalize)
+    adata_all = combine_adata(adata_list, spheroid_names, spatial_key, mol_list=mol_list, normalize=normalize,label_key=label_key)
 
     # Features in Umap
     sc.tl.pca(adata_all, n_comps=min(100,adata_all.n_vars-1))
     sc.pp.neighbors(adata_all, use_rep='X_pca', n_neighbors=30, metric='cosine')
     #sc.pp.neighbors(adata_all, n_neighbors=30, metric='cosine')
     sc.tl.umap(adata_all,random_state=42)
-    sc.pl.umap(adata_all,color='Spheroid',frameon=False,show=False)
+    sc.pl.umap(adata_all,color=label_key,frameon=False,show=False)
     if Harmony:
         # Harmony
-        sc.external.pp.harmony_integrate(adata_all, key='Spheroid',max_iter_harmony=20)
+        sc.external.pp.harmony_integrate(adata_all, key=label_key,max_iter_harmony=20)
         sc.pp.neighbors(adata_all, use_rep='X_pca_harmony', n_neighbors=30, metric='cosine',key_added='neighbors_harmony')
         sc.tl.umap(adata_all,random_state=42,neighbors_key='neighbors_harmony')
-        sc.pl.umap(adata_all,neighbors_key='neighbors_harmony',color='Spheroid',frameon=False,show=False)
+        sc.pl.umap(adata_all,neighbors_key='neighbors_harmony',color=label_key,frameon=False,show=False)
         df1 = pd.DataFrame(data=adata_all.obsm['X_pca_harmony'],dtype='float64')
     else:
         # float64 to satisfy SOM requirement
@@ -222,14 +230,13 @@ def combine_pheno_main(adata_list, spheroid_names,spatial_key,\
     colors = sc.pl.palettes.default_20[:len(phenotype_categories)]
     color_map = {category: colors[i] for i, category in enumerate(phenotype_categories)}
 
-    plot_phenotype(adata_all, spheroid_names, color_key,spatial_key, spot_size, num_cols,color_map=color_map)
+    plot_phenotype(adata_all, color_key,spatial_key, spot_size, num_cols,color_map=color_map,label_key=label_key)
     return adata_all, df
-def combine_PCA_main(adata_list, spheroid_names,spatial_key):
-    adata_all = combine_adata(adata_list, spheroid_names, spatial_key)
+def combine_PCA_main(adata_list, spheroid_names,spatial_key,spot_size=1,num_cols = 5,label_key='Spheroid'):
+    adata_all = combine_adata(adata_list, spheroid_names, spatial_key, label_key=label_key)
     sc.tl.pca(adata_all)
     for i in range(5):
         adata_all.obs[f'PC{i+1}'] = adata_all.obsm['X_pca'][:, i]
         color_key = f'PC{i+1}'
-        spot_size = 1
-        num_cols = 10
-        plot_phenotype(adata_all, spheroid_names,color_key, spatial_key, spot_size, num_cols)
+        plot_phenotype(adata_all, color_key, spatial_key, spot_size, num_cols,label_key=label_key)
+    return adata_all
