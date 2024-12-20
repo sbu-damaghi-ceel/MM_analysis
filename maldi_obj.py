@@ -158,7 +158,14 @@ def createAdata_maldi(df_intensity, df_coordinates,df_feature_list,intensity_for
     return adata
 
 def create_intensity_image(adata, molecule, spatial_key,norm=True, denoise=False, smooth=True, smooth_method='gaussian', kernel_size=3):
-    intensities = adata[:,molecule].X.toarray().flatten()
+    if molecule in adata.var_names:
+        intensities = adata[:,molecule].X.toarray().flatten()
+    elif molecule in adata.obs.columns:
+        intensities = adata.obs[molecule].to_numpy()
+    else:
+        raise ValueError(f"Molecule {molecule} not found in AnnData var_names or obs columns")
+    # assert intensities is numeric
+    assert np.issubdtype(intensities.dtype, np.number)
     max_x, max_y = adata.obsm[spatial_key][:,0].max(), adata.obsm[spatial_key][:,1].max()
     image = np.zeros((int(max_y)+1,int(max_x)+1))
 

@@ -8,9 +8,7 @@ import seaborn as sns
 
 from os.path import join
 
-from MM_analysis.maldi_obj import load_data_maldi, createAdata_maldi,get_image_dict, coreg_merge_img_dict,restore_anndata
-from MM_analysis.maldi_funcs import read_metaspace_annotation, read_metaspace_intensity, \
-createAdata_maldi_from_metaspace, readXML_affine_matrix, visualize_coreg
+
 
 from pyFlowSOM import map_data_to_nodes, som
 from .consensusClustering import ConsensusCluster
@@ -75,8 +73,8 @@ def combine_adata(adata_list, spheroid_names, spatial_key, label_key = 'Spheroid
 ## Use 2 phase clustering to identify phenotypes
 def phenoAdata(input_data,show=False,output_mean=False):
     if isinstance(input_data, pd.DataFrame):
-        # Input is already a DataFrame
-        df = input_data
+        # float64 to satisfy SOM requirement
+        df = input_data.astype(np.float64)
     elif isinstance(input_data, ad.AnnData):
         # Input is an AnnData object, extract X matrix and var_names
         df = pd.DataFrame(data=input_data.X.astype(np.float64), columns=input_data.var_names)

@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
+import xml.etree.ElementTree as ET
 
 ################ affine matrix operations ################
 def readXML_affine_matrix(xml_file_path):
@@ -24,15 +25,18 @@ def reverse_affine_matrix(affine_matrix):
     # Reverse the affine transformation matrix
     matrix_square = np.vstack([affine_matrix, [0, 0, 0, 1]])
     return np.linalg.inv(matrix_square)
-def apply_multiple_3x4_matrices(matrix_list):
+def apply_multiple_affine(matrix_list):
     '''
-    Applies a series of 3x4 transformation matrices in the specified order.
+    Applies a series of transformation matrices(3x4 or 4x4) in the specified order.
     
     Parameters:
     - matrix_list: list of np.array, each of shape (3, 4), 
     representing transformation matrices in the order they should be applied.
+    (The first matrix in the list is applied first.)
     '''
-    matrix_list_4x4 = [np.vstack([matrix, [0, 0, 0, 1]]) for matrix in matrix_list]
+    matrix_list_4x4 = [np.vstack([matrix, [0, 0, 0, 1]]) if
+                       matrix.shape == (3, 4)else matrix
+                        for matrix in matrix_list ]
 
     # Start with the last matrix in the list and apply matrices in reverse order since the matrix on the rightmost is multiplied first with the (x,y) array
     result_4x4 = matrix_list_4x4[-1]
@@ -43,8 +47,8 @@ def apply_multiple_3x4_matrices(matrix_list):
     return result_matrix
 
 ##########operate on point or image ##########
-# point simply transform a point from one coordinate system to another, suitable for cell centers
-#(image will do interpolation to have enllarged/shrinked pixels, suitabe for MALDI data)
+# point simply transform a point from one coordinate system to another, suitable for translation/rotation
+#(image will do interpolation to have enlarged/shrinked pixel blocks, suitabe for when resizing is involved)
 
 def transform_points(points, affine_matrix):
     '''
@@ -58,19 +62,27 @@ def transform_points(points, affine_matrix):
     return transformed_points[:, :2]
 
 
-def transform_image_single(target_shape, transform_img, affine_matrix):
+def transform_image_single(target_shape, transform_img, affine_matrix,interpolation='linear'):
     affine_matrix_2x3 = affine_matrix[:2, [0, 1, 3]]
     # rows, cols = target_img.shape[:2]
     rows, cols = target_shape
-    transformed_img = cv2.warpAffine(transform_img, affine_matrix_2x3, (cols, rows))
+    if interpolation == 'linear':
+        transformed_img = cv2.warpAffine(transform_img, affine_matrix_2x3, (cols, rows),\
+                                     flags=cv2.INTER_LINEAR)
+    elif interpolation == 'nearest':
+        transformed_img = cv2.warpAffine(transform_img, affine_matrix_2x3, (cols, rows),\
+                                     flags=cv2.INTER_NEAREST)
+    else:
+        raise ValueError('Invalid interpolation method. Must be either "linear" or "nearest".')
     return transformed_img
 
-def transform_image_tuple(target_shape, image_tuple, affine_matrix):
+def transform_image_tuple(target_shape, image_tuple, affine_matrix,interpolation='linear'): 
     image_array, molecule_list, max_values = image_tuple
     transformed_images = []
     for i in range(image_array.shape[0]):
         normalized_image = image_array[i] / max_values[i] # Normalize for the cv2 format
-        transformed_image = transform_image_single(target_shape, normalized_image, affine_matrix)
+        transformed_image = transform_image_single(target_shape, normalized_image, affine_matrix,\
+                                                    interpolation=interpolation)
         transformed_images.append(transformed_image*max_values[i])  # Denormalize after transformation
     return np.stack(transformed_images), molecule_list, max_values
 

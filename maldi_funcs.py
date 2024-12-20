@@ -10,7 +10,7 @@ from os.path import join
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-import xml.etree.ElementTree as ET
+
 from .maldi_obj import create_intensity_image
 
 
