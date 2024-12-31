@@ -138,7 +138,7 @@ def phenoAdata(input_data,show=False,output_mean=False):
         return df,df_mean
     else:
         return df
-def plot_phenotype(adata_all,color_key, spatial_key, spot_size, num_cols,label_key='Spheroid',color_map=None):
+def plot_phenotype(adata_all,color_key, spatial_key, spot_size, num_cols,label_key='Spheroid',color_map=None,plot_individual=False):
     
 
     #plot spatial distribution of each metacluster
@@ -148,45 +148,46 @@ def plot_phenotype(adata_all,color_key, spatial_key, spot_size, num_cols,label_k
     spheroid_names = list(adata_all.obs[label_key].unique())
     num_spheroids = len(spheroid_names)
 
-    num_rows = math.ceil(num_spheroids / num_cols)
-    fig, axs = plt.subplots(num_rows, num_cols, figsize=(5*num_cols, 5*num_rows))
-    axs = axs.flatten()
-    for i, sph_name in enumerate(sorted(spheroid_names)):
-        ax = axs[i]
-        sc.pl.spatial(adata_all[adata_all.obs[label_key] == sph_name], 
-                    basis=spatial_key,
-                    color=color_key, 
-                    spot_size=spot_size, 
-                    palette=color_map,
-                    frameon=False,
-                    ax=ax,
-                    show=False)
-        ax.set_title(sph_name)  
+    if not plot_individual:
+        num_rows = math.ceil(num_spheroids / num_cols)
+        fig, axs = plt.subplots(num_rows, num_cols, figsize=(5*num_cols, 5*num_rows))
+        axs = axs.flatten()
+        for i, sph_name in enumerate(sorted(spheroid_names)):
+            ax = axs[i]
+            sc.pl.spatial(adata_all[adata_all.obs[label_key] == sph_name], 
+                        basis=spatial_key,
+                        color=color_key, 
+                        spot_size=spot_size, 
+                        palette=color_map,
+                        frameon=False,
+                        ax=ax,
+                        show=False)
+            ax.set_title(sph_name)  
 
-    # Hide any unused subplots
-    for j in range(i+1, len(axs)):
-        fig.delaxes(axs[j])
+        # Hide any unused subplots
+        for j in range(i+1, len(axs)):
+            fig.delaxes(axs[j])
 
-    plt.tight_layout()
-    plt.show()
+        plt.tight_layout()
+        plt.show()
 
-    # plot individually
-    # for sph_name in sorted(spheroid_names):
-    #     fig, ax = plt.subplots(figsize=(5, 5))
-        
-    #     sc.pl.spatial(
-    #         adata_all[adata_all.obs[label_key] == sph_name], 
-    #         basis=spatial_key,
-    #         color=color_key, 
-    #         spot_size=spot_size, 
-    #         palette=color_map,
-    #         frameon=False,
-    #         ax=ax,
-    #         show=False
-    #     )
-        
-    #     ax.set_title(sph_name)
-    #     plt.show()
+    else:
+        for sph_name in sorted(spheroid_names):
+            fig, ax = plt.subplots(figsize=(5, 5))
+            
+            sc.pl.spatial(
+                adata_all[adata_all.obs[label_key] == sph_name], 
+                basis=spatial_key,
+                color=color_key, 
+                spot_size=spot_size, 
+                palette=color_map,
+                frameon=False,
+                ax=ax,
+                show=False
+            )
+            
+            ax.set_title(sph_name)
+            plt.show()
     
 
 def combine_pheno_main(adata_list, spheroid_names,spatial_key,label_key = 'Spheroid',\

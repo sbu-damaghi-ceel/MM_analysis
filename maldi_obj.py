@@ -253,7 +253,7 @@ def restore_anndata(image_dict, spatial_key,molecule_names=None):
         
         # Only consider pixels inside the mask
         intensities = image[mask].flatten()
-        X[:,i] = intensities
+        X[:,i] = intensities * max_intensity
         
 
     new_adata = ad.AnnData(X=X)
@@ -681,7 +681,7 @@ def restore_anndata_from_tuple(image_tuple,spatial_key,molecule_names=None):
         image = image_array[i]
         
         # Only consider pixels inside the mask
-        intensities = image[mask].flatten()
+        intensities = image[mask].flatten()*max_values[i]
         X[:,i] = intensities
         
 
