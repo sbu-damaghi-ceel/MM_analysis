@@ -348,3 +348,137 @@ def plot_unified_image_dict(ad_list,ad_names,common_var_names=None):
 Whenever trying to unify the color bar for multiple images, besides normalizing with the common rangeMax
 always specify vmin and vmax in the imshow function
 '''
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pandas as pd
+from scipy.stats import kruskal, f_oneway
+from collections import defaultdict
+
+def plot_boxplot_with_dots_compare(
+    adata_list, id_list, group_by=None, features=None, num_cols=5, stat_test="anova"
+):
+    """
+    Plots boxplots with overlaid dots for selected features in adata objects, with optional grouping,
+    and includes p-values (Kruskal-Wallis or ANOVA) indicating significant differences across groups.
+
+    Parameters:
+    - adata_list: List of AnnData objects.
+    - id_list: List of dataset IDs corresponding to the adata objects.
+    - group_by: Optional dictionary mapping group names to lists of keywords (all keywords must match).
+                Example: {'1 Week Group': ['1 week', 'week1'], '24 Hours Group': ['24 hrs', '1 day']}
+    - features: Optional list of features to plot. If None, all features will be plotted.
+                Example: ['Feature1', 'Feature2']
+    - num_cols: Number of columns for the subplot grid. Default is 5.
+    - stat_test: Statistical test to perform. Options are 'kruskal' (Kruskal-Wallis) or 'anova' (ANOVA).
+    """
+    if stat_test not in {"kruskal", "anova"}:
+        raise ValueError("stat_test must be 'kruskal' or 'anova'")
+
+    # Step 1: Get the union of features
+    all_features = set()
+    for adata in adata_list:
+        all_features.update(adata.var_names)
+
+    all_features = sorted(all_features)  # Sort for consistency
+
+    # Step 2: Filter provided features and print missing features
+    if features is not None:
+        missing_features = [feature for feature in features if feature not in all_features]
+        if missing_features:
+            print(f"The following features are not present in the data: {missing_features}")
+        features_to_plot = [feature for feature in features if feature in all_features]
+    else:
+        features_to_plot = all_features
+
+    # Step 3: Group IDs if group_by is provided
+    if group_by:
+        grouped_data = defaultdict(list)
+        for adata, exp_id in zip(adata_list, id_list):
+            matched = False
+            for group_name, keywords in group_by.items():
+                # Match only if all keywords are present in the ID
+                if all(keyword in exp_id for keyword in keywords):
+                    grouped_data[group_name].append((adata, exp_id))
+                    matched = True
+                    break
+            if not matched:  # If no group matches, treat it as its own group
+                grouped_data[exp_id].append((adata, exp_id))
+    else:
+        grouped_data = {exp_id: [(adata, exp_id)] for adata, exp_id in zip(adata_list, id_list)}
+
+    # Step 4: Prepare the subplot grid
+    num_features = len(features_to_plot)
+    num_rows = (num_features + num_cols - 1) // num_cols
+
+    fig, axes = plt.subplots(num_rows, num_cols, figsize=(num_cols * 4, num_rows * 4))
+    axes = axes.flatten() if num_features > 1 else [axes]
+
+    # Step 5: Plot for each feature in the specified list
+    for idx, feature in enumerate(features_to_plot):
+        ax = axes[idx]
+        data_for_plot = []
+
+        # Collect data for the current feature
+        for group_name, adata_id_pairs in grouped_data.items():
+            for adata, exp_id in adata_id_pairs:
+                if feature in adata.var_names:
+                    feature_values = adata[:, feature].X.flatten()
+                    data_for_plot.append(pd.DataFrame({
+                        'Value': feature_values,
+                        'Dataset': group_name
+                    }))
+
+        # Concatenate data from all datasets for this feature
+        if data_for_plot:
+            plot_data = pd.concat(data_for_plot, ignore_index=True)
+
+            # Perform the selected statistical test
+            groups = [plot_data[plot_data['Dataset'] == group]['Value'] for group in plot_data['Dataset'].unique()]
+            if all(len(group) > 1 for group in groups):  # Ensure sufficient data in each group
+                try:
+                    if stat_test == "kruskal":
+                        stat, p_value = kruskal(*groups)
+                    elif stat_test == "anova":
+                        stat, p_value = f_oneway(*groups)
+                except Exception as e:
+                    p_value = float('nan')  # If test fails
+                    print(f"{stat_test.capitalize()} test failed for feature {feature}: {e}")
+            else:
+                p_value = float('nan')  # Not enough data for statistical testing
+
+            # Plot the boxplot with overlaid dots
+            sns.boxplot(
+                data=plot_data,
+                x='Dataset',
+                y='Value',
+                showcaps=True,
+                boxprops={'facecolor': 'None'},
+                showmeans=True,
+                meanline=True,
+                meanprops={"color": "red", "ls": "-", "lw": 2},
+                showfliers=False,
+                ax=ax
+            )
+            sns.stripplot(
+                data=plot_data,
+                x='Dataset',
+                y='Value',
+                color='black',
+                alpha=0.6,
+                jitter=True,
+                size=1,
+                ax=ax
+            )
+            ax.set_title(f'{feature}\nP-Value ({stat_test.capitalize()}): {p_value:.3e}')
+            ax.set_xlabel('Dataset')
+            ax.set_ylabel('Feature Value')
+            ax.tick_params(axis='x', rotation=90)
+        else:
+            ax.set_visible(False)
+
+    # Hide unused subplots
+    for ax in axes[len(features_to_plot):]:
+        ax.set_visible(False)
+
+    plt.tight_layout()
+    plt.show()

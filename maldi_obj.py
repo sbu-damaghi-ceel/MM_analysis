@@ -298,7 +298,9 @@ def plot_images_main(image_dict, cols, keys=None,show=False):
     cols = min(cols, n)
     rows = np.ceil(n / cols).astype(int)
     fig, axs = plt.subplots(rows, cols, figsize=(15, 3 * rows))
-    if axs.ndim == 1: 
+    if n == 1:
+        axs = np.array([axs])
+    elif axs.ndim == 1: 
         axs = np.expand_dims(axs, axis=0) # Ensure axs is 2D for uniform handling
     for i, key in enumerate(keys):
         ax = axs.flat[i]
@@ -551,7 +553,9 @@ def dist2Bdry_plot_main(image_dict,distance_threshold,pixel_len=20,keys=None):
     common_boundary_points = np.array(common_boundary.exterior.coords)
 
     fig, axs = plt.subplots(len(image_dict), 3, figsize=(12, 3 * len(image_dict)))
-    if len(axs) == 1:
+    if len(image_dict) == 1:
+        axs = np.array([axs])
+    elif len(axs) == 1:
         axs = np.expand_dims(axs, axis=0)  # Ensure axs is 2D for uniform handling
     for idx,key in enumerate(keys):
         molecule_name = key

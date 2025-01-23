@@ -9,6 +9,12 @@ import matplotlib
 
 import tps
 #tps code is from https://github.com/tzing/tps-deformation
+#trans = tps.TPS(source_xy, deform_xy)
+
+# splines= cv2.createThinPlateSplineShapeTransformer()
+# temp=splines.estimateTransformation(reference_coordinate_arr,image_marks_coordinates_arr,matches)
+# warpedimage=splines.warpImage(image) #warp image
+# moved_barcodes= splines.applyTransformation(image_bar_coordinates_arr)[0] #warp points
 
 def apply_affine_transformation(points, affine_matrix,mode='forward'):
     #affine matrix is 3*4

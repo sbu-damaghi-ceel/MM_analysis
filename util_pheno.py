@@ -25,7 +25,7 @@ from functools import reduce
 def combine_adata(adata_list, spheroid_names, spatial_key, label_key = 'Spheroid',mol_list=None, normalize=None):
     common_mol = None
 
-    # Load AnnData objects and determine common molecules
+    # Load AnnData objects and determine common features
     for adata_spheroid in adata_list:
         
         print(f'spheroid size: {adata_spheroid.obsm[spatial_key][:,0].max()}*{adata_spheroid.obsm[spatial_key][:,1].max()} pixel^2')
@@ -55,12 +55,12 @@ def combine_adata(adata_list, spheroid_names, spatial_key, label_key = 'Spheroid
             else:
                 raise ValueError('Invalid normalization method. Please choose from "max" or "zscore"')
                 
-    # Subset the AnnData objects to the common molecules
+    # Subset the AnnData objects to the common features
     adata_list = [adata[:,mol_list] for adata in adata_list]
 
     # Concatenate AnnData objects while maintaining the correct metadata
     adata_all = ad.concat(adata_list, merge='same', uns_merge='unique', label=label_key, keys=spheroid_names)
-    print(f'Number of cells: {adata_all.n_obs}, Number of molecules: {adata_all.n_vars} ')
+    print(f'Number of cells: {adata_all.n_obs}, Number of features: {adata_all.n_vars} ')
     # Ensure that the Spheroid field is in the obs DataFrame
     adata_all.obs[label_key] = adata_all.obs[label_key].astype('category')
 
@@ -138,7 +138,8 @@ def phenoAdata(input_data,show=False,output_mean=False):
         return df,df_mean
     else:
         return df
-def plot_phenotype(adata_all,color_key, spatial_key, spot_size, num_cols,label_key='Spheroid',color_map=None,plot_individual=False):
+def plot_phenotype(adata_all,color_key, spatial_key, spot_size, \
+                   num_cols=5,label_key='Spheroid',color_map=None,plot_individual=False,figsize=(5,5)):
     
 
     #plot spatial distribution of each metacluster
@@ -150,11 +151,11 @@ def plot_phenotype(adata_all,color_key, spatial_key, spot_size, num_cols,label_k
 
     if not plot_individual:
         num_rows = math.ceil(num_spheroids / num_cols)
-        fig, axs = plt.subplots(num_rows, num_cols, figsize=(5*num_cols, 5*num_rows))
+        fig, axs = plt.subplots(num_rows, num_cols, figsize=(figsize[0]*num_cols, figsize[1]*num_rows))
         axs = axs.flatten()
         for i, sph_name in enumerate(sorted(spheroid_names)):
             ax = axs[i]
-            sc.pl.spatial(adata_all[adata_all.obs[label_key] == sph_name], 
+            sc.pl.spatial(adata_all[adata_all.obs[label_key] == sph_name].copy(), 
                         basis=spatial_key,
                         color=color_key, 
                         spot_size=spot_size, 
@@ -173,7 +174,7 @@ def plot_phenotype(adata_all,color_key, spatial_key, spot_size, num_cols,label_k
 
     else:
         for sph_name in sorted(spheroid_names):
-            fig, ax = plt.subplots(figsize=(5, 5))
+            fig, ax = plt.subplots(figsize=figsize)
             
             sc.pl.spatial(
                 adata_all[adata_all.obs[label_key] == sph_name], 
