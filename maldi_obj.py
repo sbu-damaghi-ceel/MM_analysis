@@ -165,7 +165,8 @@ def create_intensity_image(adata, molecule, spatial_key,norm=True, denoise=False
     else:
         raise ValueError(f"Molecule {molecule} not found in AnnData var_names or obs columns")
     # assert intensities is numeric
-    assert np.issubdtype(intensities.dtype, np.number)
+    if not np.issubdtype(intensities.dtype, np.number):
+        return None, None
     max_x, max_y = adata.obsm[spatial_key][:,0].max(), adata.obsm[spatial_key][:,1].max()
     image = np.zeros((int(max_y)+1,int(max_x)+1))
 
@@ -191,12 +192,16 @@ def create_intensity_image(adata, molecule, spatial_key,norm=True, denoise=False
             image = cv2.medianBlur(image, kernel_size)
     return image,max
 
-def get_image_dict(adata,spatial_key,molecule_list=None,verbose=True):
+def get_image_dict(adata,spatial_key,molecule_list=None,verbose=True,\
+                   **image_params):
+    '''
+    - **smooth_params: Arbitrary keyword arguments for creating images (denoise,smooth, smooth_method, kernel_size, etc.)
+    '''
     image_dict = {}
     if molecule_list is None:
         molecule_list = adata.var_names
     for molecule in molecule_list:
-        image,max = create_intensity_image(adata,molecule,spatial_key)
+        image,max = create_intensity_image(adata,molecule,spatial_key,**image_params)
         image_dict[molecule] = image,max
         if not verbose:
             print(f'Molecule {molecule} done')
@@ -285,7 +290,7 @@ def plot_images_single(ax,image,rangeMax,key,pixel_length=20):
     
     ###############Scale bar
 
-    scalebar = ScaleBar(20, 'um', location='lower right',box_alpha=0,color='white')#'μm'
+    scalebar = ScaleBar(pixel_length, 'μm', location='lower right',box_alpha=0,color='white')#'μm'
     ax.add_artist(scalebar)
     
 def plot_images_main(image_dict, cols, keys=None,show=False):

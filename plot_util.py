@@ -3,11 +3,14 @@ import pandas as pd
 import anndata as ad
 import matplotlib.pyplot as plt
 import seaborn as sns
+from matplotlib_scalebar.scalebar import ScaleBar
+
 
 from skimage.segmentation import find_boundaries
 from skimage.morphology import dilation, disk
 
 from MM_analysis.maldi_obj import get_image_dict
+
 '''functions for calculating corr and plotting heatmap/barplot'''
 def calculate_gene_distance_correlations(adata):
     expression_matrix = adata.X
@@ -294,56 +297,177 @@ def plot_boxplots_stripplots(ad_list, ad_names, common_var_names=None, image_dic
     plt.tight_layout()
     return fig, axes
 
-def unify_ad_max(ad_list,common_var_names=None):
-    if common_var_names is None:
-        common_var_names = set(ad_list[0].var_names)
-        for adata in ad_list[1:]:
-            common_var_names = common_var_names.intersection(set(adata.var_names))
-        common_var_names = sorted(common_var_names)
 
-    # not only subset but also reorder the anndata by the order of common_var_names
+def unify_ad_max(ad_list, mode='intersection', common_var_names=None):
+    """
+    Unify multiple AnnData objects based on either the intersection or union of variable names.
+    
+    Parameters:
+    - ad_list: list of AnnData objects
+    - mode: 'intersection' (default) or 'union'
+    - common_var_names: Optional pre-defined list of common variable names (only used for 'intersection')
+
+    Returns:
+    - A list of AnnData objects with harmonized varm['rangeMax'] values.
+    """
+    if mode == 'intersection':
+        var_names = set.intersection(*[set(adata.var_names) for adata in ad_list])
+    elif mode == 'union':
+        var_names = set.union(*[set(adata.var_names) for adata in ad_list])
+    else:
+        raise ValueError("mode must be either 'intersection' or 'union'")
+
+    if common_var_names:
+        common_var_names = set(common_var_names).intersection(var_names)
+    else:
+        common_var_names = var_names
+    common_var_names = sorted(common_var_names)
+
+    # Prepare reordered AnnData objects
     reordered_adata_list = []
     for adata in ad_list:
-        # Subset and reorder the AnnData by common_vars
-        adata_reordered = adata[:, common_var_names].copy()
-        common_var_indices = [adata.var_names.get_loc(var) for var in common_var_names]
-            
+        if mode == 'intersection':
+            # Subset and reorder AnnData by common_var_names
+            adata_reordered = adata[:, common_var_names].copy()
+        elif mode == 'union':
+            # Create a new AnnData object that includes all common_var_names
+            new_X = np.full((adata.shape[0], len(common_var_names)), np.nan)  # Fill missing values with NaN
+            existing_indices = [i for i, var in enumerate(common_var_names) if var in adata.var_names]
+            adata_indices = [adata.var_names.get_loc(var) for var in common_var_names if var in adata.var_names]
+            new_X[:, existing_indices] = adata.X[:, adata_indices]
+
+            # Create new AnnData with the union of variable names
+            adata_reordered = ad.AnnData(X=new_X, obs=adata.obs.copy(), var=pd.DataFrame(index=common_var_names))
+        
+        # Reorder varm according to common_var_names
+        common_var_indices = [adata.var_names.get_loc(var) for var in common_var_names if var in adata.var_names]
         for key in adata_reordered.varm.keys():
-            # Ensure that varm gets reordered according to common_vars using their indices
-            adata_reordered.varm[key] = adata.varm[key][common_var_indices]
+            if mode == 'intersection':
+                adata_reordered.varm[key] = adata.varm[key][common_var_indices]
+            elif mode == 'union':
+                new_varm = np.full((len(common_var_names), adata.varm[key].shape[1]), np.nan)  # Fill missing with NaN
+                if common_var_indices:
+                    new_varm[existing_indices] = adata.varm[key][common_var_indices]
+                adata_reordered.varm[key] = new_varm
+        
         reordered_adata_list.append(adata_reordered)
 
-    rangeMax_max = np.max(np.vstack([adata.varm['rangeMax'] for adata in reordered_adata_list]),axis=0)
+    # Compute the maximum rangeMax across all datasets
+    rangeMax_max = np.nanmax(np.vstack([adata.varm['rangeMax'] for adata in reordered_adata_list]), axis=0)
     for adata in reordered_adata_list:
         adata.varm['rangeMax'] = rangeMax_max
-    return reordered_adata_list
-def plot_unified_image_dict(ad_list,ad_names,common_var_names=None):
-    reordered_adata_list = unify_ad_max(ad_list,common_var_names=common_var_names)
-    num_ad = len(ad_list)
-    num_molecules = len(ad_list[0].var_names)
 
-    fig,axs = plt.subplots(num_molecules,num_ad,figsize=(20,5*num_molecules))
-    for j, (name, adata) in enumerate(zip(ad_names, reordered_adata_list)):
-        axs[0, j].set_title(name,fontsize=20)
-        image_dict = get_image_dict(adata,spatial_key='spatial_convert')
+    return reordered_adata_list
+
+def unify_dicts(dict_list, mode='intersection',common_var_names=None):
+    """
+    Unify a list of dictionaries where each dictionary contains molecules as keys 
+    and values as (image, rangeMax).
+
+    Parameters:
+    - dict_list: List of dictionaries {molecule: (image, rangeMax)}
+    - mode: 'intersection' (only common molecules) or 'union' (all molecules)
+
+    Returns:
+    - List of unified dictionaries with updated rangeMax and re-normalized images.
+    """
+    # Get molecule sets based on mode
+    if mode == 'intersection':
+        var_names = set.intersection(*[set(d.keys()) for d in dict_list])
+    elif mode == 'union':
+        var_names = set.union(*[set(d.keys()) for d in dict_list])
+    else:
+        raise ValueError("mode must be either 'intersection' or 'union")
+
+    if common_var_names:
+        common_var_names = set(common_var_names).intersection(var_names)
+    else:
+        common_var_names = var_names
+    common_var_names = sorted(common_var_names)
+
+    # Compute max rangeMax for each molecule
+    rangeMax_max = {}
+    for molecule in common_var_names:
+        rangeMax_max[molecule] = max(
+            (d[molecule][1] for d in dict_list if molecule in d), default=np.nan
+        )
+
+    # Normalize images using the new max rangeMax
+    unified_dicts = []
+    for d in dict_list:
+        new_dict = {}
+        for molecule in common_var_names:
+            if molecule in d:
+                image, old_rangeMax = d[molecule]
+                new_rangeMax = rangeMax_max[molecule]
+                # Avoid division by zero
+                if new_rangeMax > 0 and old_rangeMax > 0:
+                    image = image * (old_rangeMax / new_rangeMax)
+                new_dict[molecule] = (image, new_rangeMax)
+            else:
+                new_dict[molecule] = (None, np.nan)  # Fill missing molecules with None/NaN
+        unified_dicts.append(new_dict)
+
+    return unified_dicts
+
+
+
+def plot_unified_image_dict(ad_list,ad_names,spatial_key='spatial_convert',\
+                            mode='intersection',common_var_names=None\
+                            ,plot_size=5, title_size=20, ylabel_size=20):
+    image_dict_list = [get_image_dict(adata,spatial_key=spatial_key) \
+                       for adata in ad_list]
+    unified_image_dict_list = unify_dicts(image_dict_list,mode=mode,common_var_names=common_var_names)
+    common_var_names = sorted(unified_image_dict_list[0].keys())
+    num_ad = len(ad_list)
+    num_molecules = len(common_var_names)
+    if num_molecules == 0: 
+        raise ValueError('No common features')
+
+    fig,axs = plt.subplots(num_molecules,num_ad,figsize=(plot_size*num_ad,plot_size*num_molecules))
+    axs = np.atleast_2d(axs)
+    # Determine consistent image shape per dataset
+    image_shapes_rangeMax = {}
+    for j, image_dict in enumerate(unified_image_dict_list):
+        for molecule in common_var_names:
+            image, rangeMax = image_dict.get(molecule, (None, None))
+            if image is not None:
+                image_shapes_rangeMax[j] = image.shape,rangeMax  # Store the first valid shape for each column
+                break
+    
+    for j, (name, image_dict) in enumerate(zip(ad_names, unified_image_dict_list)):
+        axs[0, j].set_title(name,fontsize=title_size)
         for i, molecule in enumerate(common_var_names):
             image, rangeMax = image_dict.get(molecule)
-            if image is not None:
-                im = axs[i,j].imshow(image,aspect='auto',cmap='jet',vmin=0,vmax=1) ##SPECIFYING VMIN VMAX!!
-                #axs[i,j].axis('off')
-                # Turn off ticks, but keep the axis frame so labels can show
-                axs[i, j].set_xticks([])
-                axs[i, j].set_yticks([])
+            if image is None:
+                img_shape,rangeMax = image_shapes_rangeMax.get(j, (100, 100))  # Default to 100x100 if no valid image is found
+                image = np.ones(img_shape)
+            
+            im = axs[i,j].imshow(image,cmap='jet',\
+                                    vmin=0,vmax=1)#aspect='auto' ##SPECIFYING VMIN VMAX!!
+            #axs[i,j].axis('off')
+            # Turn off ticks, but keep the axis frame so labels can show
+            axs[i, j].set_xticks([])
+            axs[i, j].set_yticks([])
+            pixel_length=20
+            scalebar = ScaleBar(pixel_length, 'um', location='lower right',box_alpha=0,color='white')#μm
+            axs[i, j].add_artist(scalebar)
+            if j == 0: #1st column
+                axs[i, j].set_ylabel(molecule, rotation=90, labelpad=20, va='center', fontsize=ylabel_size)
+            if j == num_ad - 1: #last column
+                cbar = fig.colorbar(im, ax=axs[i, :], orientation='vertical', fraction=0.02, pad=0.04)
 
-                if j == 0:
-                    axs[i, j].set_ylabel(molecule, rotation=90,labelpad=20 ,va='center',fontsize=15)
-                if j == num_ad - 1:
-                    cbar = fig.colorbar(im, ax=axs[i, :], orientation='vertical', fraction=0.02, pad=0.04)
+                # Multiply colorbar ticks by rangeMax
+                cbar_ticks = cbar.get_ticks()  # Get current ticks
+                cbar.set_ticks(cbar_ticks)  # Set the same ticks
+                cbar.set_ticklabels([f'{tick * rangeMax:.2f}' for tick in cbar_ticks])  # Scale by rangeMax
 
-                    # Multiply colorbar ticks by rangeMax
-                    cbar_ticks = cbar.get_ticks()  # Get current ticks
-                    cbar.set_ticks(cbar_ticks)  # Set the same ticks
-                    cbar.set_ticklabels([f'{tick * rangeMax:.2f}' for tick in cbar_ticks])  # Scale by rangeMax
+
+    #remove unused subplots
+    for i in range(num_molecules):
+        for j in range(num_ad):
+            if j >= num_ad:
+                axs[i,j].set_visible(False)
 '''
 Whenever trying to unify the color bar for multiple images, besides normalizing with the common rangeMax
 always specify vmin and vmax in the imshow function
@@ -481,4 +605,22 @@ def plot_boxplot_with_dots_compare(
         ax.set_visible(False)
 
     plt.tight_layout()
+    plt.show()
+
+'''Given a list of adata, show how many featurs are shared between each pair of adata'''
+def plot_intersection_matrix(spheroid_names,adata_list):
+    var_names_sets = {spheroid_names[i]: set(ad.var_names) for i, ad in enumerate(adata_list)}
+    #all_var_names = set.union(*var_names_sets.values())
+    # Create a set-to-set overlap matrix
+    overlap_matrix = np.zeros((len(var_names_sets), len(var_names_sets)))
+    for i, set_i in enumerate(var_names_sets.values()):
+        for j, set_j in enumerate(var_names_sets.values()):
+            overlap_matrix[i, j] = len(set_i & set_j)  # Intersection size
+
+    plt.figure(figsize=(10, 8))
+    plt.imshow(overlap_matrix, cmap="Blues", interpolation="none")
+    plt.colorbar(label="Intersection Size")
+    plt.xticks(range(len(var_names_sets)), list(var_names_sets.keys()), rotation=90)
+    plt.yticks(range(len(var_names_sets)), list(var_names_sets.keys()))
+    plt.title("Set Intersection Matrix")
     plt.show()
