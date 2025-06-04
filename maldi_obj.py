@@ -29,6 +29,17 @@ import h5py
 import pdb
 
 def get_mz_mol_mapping(df_feature_list, mz_list):
+    # Check no duplicates in df_feature_list['Name']
+    if df_feature_list['Name'].duplicated().any():
+        duplicates = df_feature_list['Name'][df_feature_list['Name'].duplicated()].unique()
+        # rename duplicates with suffix
+        for dup in duplicates:
+            dup_indices = df_feature_list[df_feature_list['Name'] == dup].index
+            for i, idx in enumerate(dup_indices):
+                df_feature_list.at[idx, 'Name'] = f"{dup}_{i+1}"
+        
+        #raise ValueError(f"Duplicate molecule names {duplicates} found in df_feature_list['Name']. Please ensure unique names.")
+
     df = df_feature_list.copy()
     mapped_molecules = []
     
@@ -55,7 +66,7 @@ def load_data_maldi(int_path,coor_path,feat_path, skip_rows_intensity, skip_rows
     df_intensity = pd.read_csv(int_path, skiprows=skip_rows_intensity, header=0, delimiter=';')
     df_coordinates = pd.read_csv(coor_path, skiprows=skip_rows_coordinates, delimiter=';')
     df_feature_list = pd.read_csv(feat_path,skiprows=skip_rows_featureList, delimiter=';')
-
+    
     df_coordinates.columns = ['Spot', 'x', 'y']
     # Correcting spot numbering mismatch
     df_coordinates['Spot'] = 'Spot '+ (df_coordinates['Spot'] + 1).astype(str)
@@ -95,7 +106,7 @@ def average_columns(df, group_size=4):
     averaged_df = pd.DataFrame({name: data for name, data in averaged_columns})
 
     return averaged_df
-def createAdata_maldi(df_intensity, df_coordinates,df_feature_list,intensity_format='col',thres=95,verbose=False):
+def createAdata_maldi(df_intensity, df_coordinates,df_feature_list,intensity_format='col',thres=.95,verbose=False):
     '''
     thres: the percentile threshold to remove molecules with {100*thres}% or more 0 intensities
     OR the number of non-zero pixels < thres 
@@ -290,7 +301,7 @@ def plot_images_single(ax,image,rangeMax,key,pixel_length=20):
     
     ###############Scale bar
 
-    scalebar = ScaleBar(pixel_length, 'μm', location='lower right',box_alpha=0,color='white')#'μm'
+    scalebar = ScaleBar(pixel_length, 'um', location='lower right',box_alpha=0,color='white')#'μm'
     ax.add_artist(scalebar)
     
 def plot_images_main(image_dict, cols, keys=None,show=False):

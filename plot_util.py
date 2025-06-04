@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import pandas as pd
 import anndata as ad
@@ -373,9 +374,14 @@ def unify_dicts(dict_list, mode='intersection',common_var_names=None):
     """
     # Get molecule sets based on mode
     if mode == 'intersection':
-        var_names = set.intersection(*[set(d.keys()) for d in dict_list])
+        if not dict_list:
+            var_names = set()
+        else:
+            var_names = set(dict_list[0].keys()).intersection(
+                *(set(d.keys()) for d in dict_list[1:])
+            )
     elif mode == 'union':
-        var_names = set.union(*[set(d.keys()) for d in dict_list])
+        var_names = set().union(*(set(d.keys()) for d in dict_list))
     else:
         raise ValueError("mode must be either 'intersection' or 'union")
 
@@ -408,69 +414,102 @@ def unify_dicts(dict_list, mode='intersection',common_var_names=None):
                 new_dict[molecule] = (None, np.nan)  # Fill missing molecules with None/NaN
         unified_dicts.append(new_dict)
 
-    return unified_dicts
+    return unified_dicts, rangeMax_max
 
 
 
 def plot_unified_image_dict(ad_list,ad_names,spatial_key='spatial_convert',\
-                            mode='intersection',common_var_names=None\
-                            ,plot_size=5, title_size=20, ylabel_size=20):
+                            mode='intersection',common_var_names=None,\
+                            plot_size=5, title_size=20, ylabel_size=20,\
+                            max_rows_per_page=None,save_path=None):
+    # Sort the ad_names and unified_image_dict_list based on ad_names
+    assert len(ad_list) == len(ad_names), "ad_list and ad_names must have the same length"
+    pairs = list(zip(ad_names, ad_list))
+    pairs.sort(key=lambda x: x[0]) 
+    ad_names, ad_list = zip(*pairs)
+    ad_names, ad_list = list(ad_names), list(ad_list)
+    
     image_dict_list = [get_image_dict(adata,spatial_key=spatial_key) \
                        for adata in ad_list]
-    unified_image_dict_list = unify_dicts(image_dict_list,mode=mode,common_var_names=common_var_names)
+    unified_image_dict_list, rangeMax_max = unify_dicts(image_dict_list,mode=mode,common_var_names=common_var_names)
+    
+    
     common_var_names = sorted(unified_image_dict_list[0].keys())
     num_ad = len(ad_list)
     num_molecules = len(common_var_names)
     if num_molecules == 0: 
         raise ValueError('No common features')
-
-    fig,axs = plt.subplots(num_molecules,num_ad,figsize=(plot_size*num_ad,plot_size*num_molecules))
-    axs = np.atleast_2d(axs)
-    # Determine consistent image shape per dataset
-    image_shapes_rangeMax = {}
-    for j, image_dict in enumerate(unified_image_dict_list):
-        for molecule in common_var_names:
-            image, rangeMax = image_dict.get(molecule, (None, None))
-            if image is not None:
-                image_shapes_rangeMax[j] = image.shape,rangeMax  # Store the first valid shape for each column
-                break
+    if max_rows_per_page is None:
+        max_rows_per_page = num_molecules
     
-    for j, (name, image_dict) in enumerate(zip(ad_names, unified_image_dict_list)):
-        axs[0, j].set_title(name,fontsize=title_size)
-        for i, molecule in enumerate(common_var_names):
-            image, rangeMax = image_dict.get(molecule)
-            if image is None:
-                img_shape,rangeMax = image_shapes_rangeMax.get(j, (100, 100))  # Default to 100x100 if no valid image is found
-                image = np.ones(img_shape)
+    pages = [
+        common_var_names[i : i + max_rows_per_page]
+        for i in range(0, num_molecules, max_rows_per_page)
+    ]
+    for page_idx, molecules_on_page in enumerate(pages):
+        n_rows = len(molecules_on_page)
+        n_cols = num_ad
+        fig,axs = plt.subplots(n_rows,n_cols,figsize=(plot_size*n_cols,plot_size*n_rows))
+        axs = np.atleast_2d(axs)
+        # Determine consistent image shape per column (for alignment)
+        image_shapes = {}
+        for j, image_dict in enumerate(unified_image_dict_list):
+            for molecule in molecules_on_page:
+                image, rangeMax = image_dict.get(molecule, (None, None))
+                if image is not None:
+                    image_shapes[j] = image.shape  # Store the first valid shape for each column
+                    break
+        
+        for j, (name, image_dict) in enumerate(zip(ad_names, unified_image_dict_list)):
+            axs[0, j].set_title(name,fontsize=title_size)
             
-            im = axs[i,j].imshow(image,cmap='jet',\
-                                    vmin=0,vmax=1)#aspect='auto' ##SPECIFYING VMIN VMAX!!
-            #axs[i,j].axis('off')
-            # Turn off ticks, but keep the axis frame so labels can show
-            axs[i, j].set_xticks([])
-            axs[i, j].set_yticks([])
-            pixel_length=20
-            scalebar = ScaleBar(pixel_length, 'um', location='lower right',box_alpha=0,color='white')#μm
-            axs[i, j].add_artist(scalebar)
-            if j == 0: #1st column
-                axs[i, j].set_ylabel(molecule, rotation=90, labelpad=20, va='center', fontsize=ylabel_size)
-            if j == num_ad - 1: #last column
-                cbar = fig.colorbar(im, ax=axs[i, :], orientation='vertical', fraction=0.02, pad=0.04)
+            for i, molecule in enumerate(molecules_on_page):
+                image, rangeMax = image_dict.get(molecule,(None, None))
+                if image is None:
+                    img_shape = image_shapes.get(j, (100, 100))  # Default to 100x100 if no valid image is found
+                    image = np.ones(img_shape)
+                
+                im = axs[i,j].imshow(image,cmap='jet',\
+                                        vmin=0,vmax=1)#aspect='auto' ##SPECIFYING VMIN VMAX!!
+                #axs[i,j].axis('off')
+                # Turn off ticks, but keep the axis frame so labels can show
+                axs[i, j].set_xticks([])
+                axs[i, j].set_yticks([])
+                pixel_length=20
+                scalebar = ScaleBar(pixel_length, 'um', location='lower right',box_alpha=0,color='white')#μm
+                axs[i, j].add_artist(scalebar)
+                if j == 0: #1st column
+                    axs[i, j].set_ylabel(molecule, rotation=90, labelpad=20, va='center', fontsize=ylabel_size)
+                if j == num_ad - 1: #last column
+                    cbar = fig.colorbar(im, ax=axs[i, :], orientation='vertical', fraction=0.02, pad=0.04)
 
-                # Multiply colorbar ticks by rangeMax
-                cbar_ticks = cbar.get_ticks()  # Get current ticks
-                cbar.set_ticks(cbar_ticks)  # Set the same ticks
-                cbar.set_ticklabels([f'{tick * rangeMax:.2f}' for tick in cbar_ticks])  # Scale by rangeMax
+                    # Multiply colorbar ticks by rangeMax
+                    cbar_ticks = cbar.get_ticks()  # Get current ticks
+                    cbar.set_ticks(cbar_ticks)  # Set the same ticks
+                    rangeMax_row = rangeMax_max[molecule]
+                    cbar.set_ticklabels([f'{tick * rangeMax_row:.2f}' for tick in cbar_ticks])  # Scale by rangeMax
 
 
-    #remove unused subplots
-    for i in range(num_molecules):
-        for j in range(num_ad):
-            if j >= num_ad:
-                axs[i,j].set_visible(False)
+        #remove unused subplots
+        for i in range(num_molecules):
+            for j in range(num_ad):
+                if j >= num_ad:
+                    axs[i,j].set_visible(False)
+
+        if save_path:
+            base, ext = os.path.splitext(save_path)
+            if page_idx == 0:
+                fig.savefig(save_path, bbox_inches='tight')
+            else:
+                fig.savefig(f"{base}_page{page_idx+1}{ext}", bbox_inches='tight')
+        else:
+            plt.show()
+        plt.close(fig)
+        
+    return
 '''
 Whenever trying to unify the color bar for multiple images, besides normalizing with the common rangeMax
-always specify vmin and vmax in the imshow function
+always specify vmin and vmax as (0,1) in the imshow function
 '''
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -608,7 +647,7 @@ def plot_boxplot_with_dots_compare(
     plt.show()
 
 '''Given a list of adata, show how many featurs are shared between each pair of adata'''
-def plot_intersection_matrix(spheroid_names,adata_list):
+def plot_intersection_matrix(spheroid_names,adata_list,figsize=(10, 8)):
     var_names_sets = {spheroid_names[i]: set(ad.var_names) for i, ad in enumerate(adata_list)}
     #all_var_names = set.union(*var_names_sets.values())
     # Create a set-to-set overlap matrix
@@ -617,10 +656,12 @@ def plot_intersection_matrix(spheroid_names,adata_list):
         for j, set_j in enumerate(var_names_sets.values()):
             overlap_matrix[i, j] = len(set_i & set_j)  # Intersection size
 
-    plt.figure(figsize=(10, 8))
+    plt.figure(figsize=figsize)
     plt.imshow(overlap_matrix, cmap="Blues", interpolation="none")
     plt.colorbar(label="Intersection Size")
     plt.xticks(range(len(var_names_sets)), list(var_names_sets.keys()), rotation=90)
     plt.yticks(range(len(var_names_sets)), list(var_names_sets.keys()))
     plt.title("Set Intersection Matrix")
     plt.show()
+
+    return overlap_matrix

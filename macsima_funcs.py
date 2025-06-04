@@ -50,28 +50,32 @@ def plot_raw_histo(count_matrix,gene_names):
 
     plt.tight_layout()
     plt.show()
-def preprocess_count(count_matrix,pth=95,normal=None):
-    #trim normalization method(replace extreme values with 99th percentile)
-    log_count_matrix = np.log(count_matrix+1)
-    count_matrix_clipped = log_count_matrix.copy()
-    percentiles_99 = np.percentile(log_count_matrix, pth, axis=0)
-    for j in range(count_matrix.shape[1]):
-        count_matrix_clipped[log_count_matrix[:,j] > percentiles_99[j],j] = percentiles_99[j]
-        count_matrix_clipped[log_count_matrix[:,j] < -percentiles_99[j],j] = -percentiles_99[j]
-        #print(f'column {j} replace {np.sum(log_count_matrix[:,j] > percentiles_99[j])+\
-        #    np.sum(log_count_matrix[:,j] < -percentiles_99[j])}')
+def preprocess_count(count_matrix,pth=95,log=True,clip=True,row_normal=None,normal=None):
+    if log:
+        count_matrix = np.log(count_matrix+1)
+    if clip:
+        #trim (replace extreme values with 99th percentile)
+        percentiles_99 = np.percentile(count_matrix, pth, axis=0)
+        count_matrix = np.clip(count_matrix, a_min=None, a_max=percentiles_99)
+    if row_normal is not None:
+        count_matrix = count_matrix.div(count_matrix.sum(axis=1), axis=0, fill_value=0)
+
     if normal is None:
-        count_matrix_normalized = count_matrix_clipped
+        count_matrix_normalized = count_matrix
     elif normal == 'maxmin':
-        max = np.max(count_matrix_clipped, axis=0)
-        min = np.min(count_matrix_clipped, axis=0)
-        count_matrix_normalized = (count_matrix_clipped - min) / (max-min)
+        max = np.max(count_matrix, axis=0)
+        min = np.min(count_matrix, axis=0)
+        count_matrix_normalized = (count_matrix - min) / (max-min)
     elif normal == 'zscore':
-        mean = np.mean(count_matrix_clipped, axis=0)
-        std = np.std(count_matrix_clipped, axis=0)
-        count_matrix_normalized = (count_matrix_clipped - mean) / std
+        mean = np.mean(count_matrix, axis=0)
+        std = np.std(count_matrix, axis=0)
+        count_matrix_normalized = (count_matrix - mean) / std
+    
+    elif normal == 'divideByMean':
+        mean = np.mean(count_matrix, axis=0)
+        count_matrix_normalized = count_matrix / mean
     else:
-        raise ValueError("Invalid value for 'normal'. Supported options are: None, 'maxmin', 'zscore'")
+        raise ValueError("Invalid value for 'normal'. Supported options are: None, 'maxmin', 'zscore','divideByMean'")
     return count_matrix_normalized
 
 def createAdata_macsima(count_matrix_normalized,gene_names,sample_names,spatial_locs=None):
